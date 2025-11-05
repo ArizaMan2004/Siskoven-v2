@@ -1,24 +1,13 @@
-// products-view.tsx
 "use client"
 
-import React, { useState, useEffect, FormEvent } from "react"
+import { useState, useEffect, type FormEvent } from "react"
 import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/firebase"
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  addDoc,
-  updateDoc,
-  deleteDoc,
-  doc,
-  Timestamp,
-} from "firebase/firestore"
+import { collection, query, where, getDocs, addDoc, updateDoc, deleteDoc, doc, Timestamp } from "firebase/firestore"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Plus, Edit2, Trash2, X } from "lucide-react"
+import { Plus, Edit2, Trash2, X, Search } from "lucide-react"
 import { getBCVRate } from "@/lib/bcv-service"
 import { getCategories, addCategory } from "@/lib/categories-service"
 import BCVWidget from "./bcv-widget"
@@ -59,8 +48,7 @@ export default function ProductsView() {
   const [categories, setCategories] = useState<string[]>([])
   const [bcvRate, setBcvRate] = useState<number>(216.37)
   const [newCategoryName, setNewCategoryName] = useState("")
-
-  // Estado inicial simplificado: se eliminan los campos relacionados con "lote"
+  const [showMobileSearch, setShowMobileSearch] = useState(false)
   const [formData, setFormData] = useState<FormData>({
     name: "",
     category: "",
@@ -135,8 +123,8 @@ export default function ProductsView() {
     try {
       // Se eliminó la lógica de cálculo por lote.
       // Se toma el Costo USD como costo unitario y Quantity como cantidad total.
-      const costUsd = parseFloat(formData.costUsd)
-      const quantity = parseInt(formData.quantity)
+      const costUsd = Number.parseFloat(formData.costUsd)
+      const quantity = Number.parseInt(formData.quantity)
 
       const productData = {
         userId: user.uid,
@@ -144,7 +132,7 @@ export default function ProductsView() {
         category: formData.category,
         costUsd,
         quantity,
-        profit: parseFloat(formData.profit),
+        profit: Number.parseFloat(formData.profit),
         saleType: formData.saleType,
         barcode: formData.barcode.trim(),
         createdAt: Timestamp.now(),
@@ -218,12 +206,12 @@ export default function ProductsView() {
 
   // 🧱 Render
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 px-4 md:px-0 pb-20 md:pb-0">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-bold text-foreground">Productos</h2>
-          <p className="text-muted-foreground">Gestiona tu inventario</p>
+          <h2 className="text-2xl sm:text-3xl font-bold text-foreground">Productos</h2>
+          <p className="text-sm sm:text-base text-muted-foreground">Gestiona tu inventario</p>
         </div>
         <Button
           onClick={() => {
@@ -231,7 +219,7 @@ export default function ProductsView() {
             resetForm()
             setShowForm(!showForm)
           }}
-          className="gap-2 bg-primary hover:bg-primary/90"
+          className="gap-2 bg-primary hover:bg-primary/90 w-full sm:w-auto"
         >
           <Plus className="w-4 h-4" />
           Agregar Producto
@@ -243,31 +231,33 @@ export default function ProductsView() {
       {/* Formulario */}
       {showForm && (
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>{editingId ? "Editar Producto" : "Nuevo Producto"}</CardTitle>
-            <button onClick={resetForm} className="text-muted-foreground hover:text-foreground">
+          <CardHeader className="flex flex-row items-center justify-between gap-2">
+            <CardTitle className="text-lg sm:text-xl">{editingId ? "Editar Producto" : "Nuevo Producto"}</CardTitle>
+            <button onClick={resetForm} className="text-muted-foreground hover:text-foreground flex-shrink-0">
               <X className="w-5 h-5" />
             </button>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleAddProduct} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Input
                   placeholder="Nombre del producto"
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   required
+                  className="h-10"
                 />
                 <Input
                   placeholder="Código de barras"
                   value={formData.barcode}
                   onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
+                  className="h-10"
                 />
 
                 <select
                   value={formData.category}
                   onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                  className="px-3 py-2 border border-input rounded-md bg-background"
+                  className="px-3 py-2 border border-input rounded-md bg-background h-10"
                   required
                 >
                   <option value="">Selecciona categoría</option>
@@ -278,17 +268,18 @@ export default function ProductsView() {
                   ))}
                 </select>
 
-                <div className="flex gap-2">
+                <div className="flex gap-2 sm:col-span-1">
                   <Input
                     placeholder="Nueva categoría"
                     value={newCategoryName}
                     onChange={(e) => setNewCategoryName(e.target.value)}
+                    className="h-10"
                   />
                   <Button
                     type="button"
                     onClick={handleAddCategory}
                     variant="outline"
-                    className="whitespace-nowrap bg-transparent"
+                    className="whitespace-nowrap bg-transparent flex-shrink-0"
                   >
                     Agregar
                   </Button>
@@ -301,17 +292,18 @@ export default function ProductsView() {
                   value={formData.costUsd}
                   onChange={(e) => setFormData({ ...formData, costUsd: e.target.value })}
                   required
+                  className="h-10"
                 />
 
-                {/* Se muestra solo el campo de cantidad, ya no es condicional */}
                 <Input
                   type="number"
                   placeholder="Cantidad disponible (unidades)"
                   value={formData.quantity}
                   onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
                   required
+                  className="h-10"
                 />
-                
+
                 <Input
                   type="number"
                   placeholder="Ganancia %"
@@ -319,28 +311,25 @@ export default function ProductsView() {
                   value={formData.profit}
                   onChange={(e) => setFormData({ ...formData, profit: e.target.value })}
                   required
+                  className="h-10"
                 />
 
                 <select
                   value={formData.saleType}
-                  onChange={(e) =>
-                    setFormData({ ...formData, saleType: e.target.value as FormData["saleType"] })
-                  }
-                  className="px-3 py-2 border border-input rounded-md bg-background"
+                  onChange={(e) => setFormData({ ...formData, saleType: e.target.value as FormData["saleType"] })}
+                  className="px-3 py-2 border border-input rounded-md bg-background h-10"
                 >
                   <option value="unit">Por Unidad</option>
                   <option value="weight">Por Peso (Kg)</option>
                   <option value="area">Por Área (m²)</option>
                 </select>
-                
-                {/* Se eliminaron: select de costType y campos condicionales de lote/unidad */}
               </div>
 
-              <div className="flex gap-2">
-                <Button type="submit" className="bg-primary hover:bg-primary/90">
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Button type="submit" className="bg-primary hover:bg-primary/90 h-10">
                   {editingId ? "Actualizar" : "Guardar"}
                 </Button>
-                <Button type="button" onClick={resetForm} variant="outline">
+                <Button type="button" onClick={resetForm} variant="outline" className="h-10 bg-transparent">
                   Cancelar
                 </Button>
               </div>
@@ -349,20 +338,20 @@ export default function ProductsView() {
         </Card>
       )}
 
-      {/* Tabla */}
-      <Card>
+      {/* Tabla - solo visible en desktop */}
+      <Card className="hidden md:block">
         <CardHeader>
-          <div className="flex gap-2">
+          <div className="flex flex-col sm:flex-row gap-2">
             <Input
               placeholder="Buscar producto..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="flex-1"
+              className="flex-1 h-10"
             />
             <select
               value={selectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
-              className="px-3 py-2 border border-input rounded-md bg-background"
+              className="px-3 py-2 border border-input rounded-md bg-background h-10 sm:w-48"
             >
               <option value="">Todas las categorías</option>
               {categories.map((cat, i) => (
@@ -378,9 +367,7 @@ export default function ProductsView() {
             <div className="text-center py-8">Cargando productos...</div>
           ) : filteredProducts.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              {products.length === 0
-                ? "No hay productos. Crea uno para comenzar."
-                : "No se encontraron productos."}
+              {products.length === 0 ? "No hay productos. Crea uno para comenzar." : "No se encontraron productos."}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -407,17 +394,12 @@ export default function ProductsView() {
                         <td className="py-3 px-4">{product.category}</td>
                         <td className="text-right py-3 px-4">${product.costUsd.toFixed(2)}</td>
                         <td className="text-right py-3 px-4">${salePrice.toFixed(2)}</td>
-                        <td className="text-right py-3 px-4 font-semibold text-primary">
-                          Bs {salePriceBs.toFixed(2)}
-                        </td>
+                        <td className="text-right py-3 px-4 font-semibold text-primary">Bs {salePriceBs.toFixed(2)}</td>
                         <td className="text-right py-3 px-4">{product.quantity}</td>
                         <td className="py-3 px-4 capitalize">{product.saleType}</td>
                         <td className="py-3 px-4">
                           <div className="flex justify-center gap-2">
-                            <button
-                              onClick={() => handleEditProduct(product)}
-                              className="p-1 hover:bg-muted rounded"
-                            >
+                            <button onClick={() => handleEditProduct(product)} className="p-1 hover:bg-muted rounded">
                               <Edit2 className="w-4 h-4 text-primary" />
                             </button>
                             <button
@@ -437,6 +419,132 @@ export default function ProductsView() {
           )}
         </CardContent>
       </Card>
+
+      {/* Vista móvil: Tarjetas */}
+      <div className="md:hidden space-y-3">
+        {loading ? (
+          <div className="text-center py-8">Cargando productos...</div>
+        ) : filteredProducts.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground">
+            {products.length === 0 ? "No hay productos. Crea uno para comenzar." : "No se encontraron productos."}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filteredProducts.map((product) => {
+              const salePrice = calculateSalePrice(product)
+              const salePriceBs = salePrice * bcvRate
+              return (
+                <Card key={product.id} className="border-l-4 border-l-primary">
+                  <CardContent className="pt-4 space-y-3">
+                    <div>
+                      <h3 className="font-semibold text-lg text-foreground">{product.name}</h3>
+                      <p className="text-xs text-muted-foreground">{product.category}</p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <p className="text-muted-foreground text-xs">Costo USD</p>
+                        <p className="font-medium">${product.costUsd.toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground text-xs">Venta USD</p>
+                        <p className="font-medium">${salePrice.toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground text-xs">Venta Bs</p>
+                        <p className="font-semibold text-primary">Bs {salePriceBs.toFixed(2)}</p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground text-xs">Disponibles</p>
+                        <p className="font-medium">{product.quantity}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2 text-xs">
+                      <span className="px-2 py-1 bg-muted rounded capitalize">{product.saleType}</span>
+                      {product.barcode && <span className="px-2 py-1 bg-muted rounded">{product.barcode}</span>}
+                    </div>
+
+                    <div className="flex gap-2 pt-2 border-t border-border">
+                      <button
+                        onClick={() => handleEditProduct(product)}
+                        className="flex-1 p-2 hover:bg-muted rounded flex items-center justify-center gap-2 text-primary"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                        <span className="text-sm">Editar</span>
+                      </button>
+                      <button
+                        onClick={() => handleDeleteProduct(product.id)}
+                        className="flex-1 p-2 hover:bg-muted rounded flex items-center justify-center gap-2 text-destructive"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                        <span className="text-sm">Eliminar</span>
+                      </button>
+                    </div>
+                  </CardContent>
+                </Card>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="md:hidden fixed bottom-6 right-6 z-40 flex flex-col items-end gap-3">
+        {/* Modal de búsqueda expandido */}
+        {showMobileSearch && (
+          <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 bg-card border border-border rounded-lg shadow-lg p-4 w-80 max-w-[calc(100vw-2rem)]">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-sm">Buscar Producto</h3>
+              <button
+                onClick={() => setShowMobileSearch(false)}
+                className="p-1 hover:bg-muted rounded transition-colors"
+                aria-label="Cerrar búsqueda"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <Input
+                placeholder="Buscar producto..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="h-10"
+                autoFocus
+                aria-label="Campo de búsqueda"
+              />
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="w-full px-3 py-2 border border-input rounded-md bg-background h-10"
+                aria-label="Filtrar por categoría"
+              >
+                <option value="">Todas las categorías</option>
+                {categories.map((cat, i) => (
+                  <option key={`${cat}-${i}`} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+
+        {/* Botón flotante circular con lupa */}
+        <button
+          onClick={() => setShowMobileSearch(!showMobileSearch)}
+          className="relative w-14 h-14 rounded-full bg-primary hover:bg-primary/90 shadow-lg flex items-center justify-center transition-all duration-300 hover:scale-110 active:scale-95"
+          aria-label="Abrir búsqueda de productos"
+          aria-expanded={showMobileSearch}
+        >
+          <Search className="h-6 w-6 text-primary-foreground" />
+
+          {/* Indicador pulsante cuando hay filtros activos */}
+          {(searchTerm || selectedCategory) && (
+            <span className="absolute top-0 right-0 w-3 h-3 bg-accent rounded-full animate-pulse" />
+          )}
+        </button>
+      </div>
     </div>
   )
 }

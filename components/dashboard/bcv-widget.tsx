@@ -102,7 +102,7 @@ const handleRefreshFromAPI = async () => {
             className="w-full gap-2 bg-transparent"
           >
             <RefreshCw className={`w-4 h-4 ${isUpdating ? "animate-spin" : ""}`} />
-            {isUpdating ? "Actualizando..." : "Actualizar Tasa BCV automaticamente"}
+            {isUpdating ? "Actualizando..." : "Actualizar Tasa BCV"}
           </Button>
         </div>
       </CardContent>
