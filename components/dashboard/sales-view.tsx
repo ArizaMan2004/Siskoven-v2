@@ -1,6 +1,8 @@
 "use client"
 
 import { useState, useEffect } from "react"
+// ⭐️ NUEVO: Importación para animaciones
+import { motion } from "framer-motion" 
 import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/firebase"
 import { collection, query, where, getDocs, addDoc, updateDoc, doc, Timestamp } from "firebase/firestore"
@@ -298,7 +300,13 @@ export default function SalesView() {
   )
 
   return (
-    <div className="relative">
+    // ⭐️ AJUSTE DE ANIMACIÓN: motion.div envuelve todo el contenido
+    <motion.div
+      initial={{ opacity: 0, y: 20 }} // Comienza invisible y 20px abajo
+      animate={{ opacity: 1, y: 0 }}  // Termina visible y en su posición (subiendo)
+      transition={{ duration: 0.5, ease: "easeOut" }} // Duración de 0.5 segundos
+      className="relative"
+    >
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
         <div className="lg:col-span-2 space-y-4 lg:space-y-6">
           <div className="flex items-center justify-between">
@@ -549,6 +557,6 @@ export default function SalesView() {
           </div>
         </div>
       </div>
-    </div>
+    </motion.div>
   )
 }

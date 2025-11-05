@@ -11,9 +11,12 @@ import { Plus, Edit2, Trash2, X, Search } from "lucide-react"
 import { getBCVRate } from "@/lib/bcv-service"
 import { getCategories, addCategory } from "@/lib/categories-service"
 import BCVWidget from "./bcv-widget"
+// ⭐️ NUEVO: Importación para animaciones
+import { motion } from "framer-motion" 
 
 // 🧩 Interfaces y tipos
 interface Product {
+// ... (cuerpo de Product) ...
   id: string
   name: string
   category: string
@@ -24,8 +27,9 @@ interface Product {
   barcode?: string
 }
 
-// Interfaz simplificada: se eliminan los campos relacionados con "lote"
+// Interfaz simplificada
 interface FormData {
+// ... (cuerpo de FormData) ...
   name: string
   category: string
   costUsd: string
@@ -67,6 +71,7 @@ export default function ProductsView() {
     fetchBCV()
   }, [user])
 
+// ... (funciones loadCategories, loadProducts, etc.) ...
   const fetchBCV = async () => {
     try {
       const bcvData = await getBCVRate()
@@ -206,7 +211,13 @@ export default function ProductsView() {
 
   // 🧱 Render
   return (
-    <div className="space-y-6 px-4 md:px-0 pb-20 md:pb-0">
+    // ⭐️ AJUSTE DE ANIMACIÓN: motion.div envuelve todo el contenido
+    <motion.div
+      initial={{ opacity: 0, y: 20 }} // Comienza invisible y 20px abajo
+      animate={{ opacity: 1, y: 0 }}  // Termina visible y en su posición (subiendo)
+      transition={{ duration: 0.5, ease: "easeOut" }} // Duración de 0.5 segundos
+      className="space-y-6 px-4 md:px-0 pb-20 md:pb-0"
+    >
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -545,6 +556,6 @@ export default function ProductsView() {
           )}
         </button>
       </div>
-    </div>
+    </motion.div>
   )
 }

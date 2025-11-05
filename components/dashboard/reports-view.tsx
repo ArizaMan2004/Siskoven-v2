@@ -9,6 +9,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { generateInventoryReport, generateInvoice, generateProductLabels } from "@/lib/pdf-generator"
 import { getBCVRate } from "@/lib/bcv-service"
 import { FileText, Download } from "lucide-react"
+// ⭐️ NUEVO: Importación para animaciones
+import { motion } from "framer-motion"
 
 interface Product {
   id: string
@@ -98,7 +100,13 @@ export default function ReportsView() {
   }
 
   return (
-    <div className="space-y-4 md:space-y-6">
+    // ⭐️ AJUSTE DE ANIMACIÓN: motion.div envuelve todo el contenido
+    <motion.div
+      initial={{ opacity: 0, y: 20 }} // Comienza invisible y 20px abajo
+      animate={{ opacity: 1, y: 0 }}  // Termina visible y en su posición (subiendo)
+      transition={{ duration: 0.5, ease: "easeOut" }} // Duración de 0.5 segundos
+      className="space-y-4 md:space-y-6"
+    >
       <div>
         <h2 className="text-2xl md:text-3xl font-bold text-foreground mb-2 md:mb-4">Reportes</h2>
         <p className="text-sm md:text-base text-muted-foreground">Genera reportes e invoices en PDF</p>
@@ -223,6 +231,6 @@ export default function ReportsView() {
           )}
         </CardContent>
       </Card>
-    </div>
+    </motion.div>
   )
 }

@@ -19,6 +19,8 @@ import {
   Pie,
   Cell,
 } from "recharts"
+// ⭐️ NUEVO: Importación para animaciones
+import { motion } from "framer-motion"
 
 interface Sale {
   id: string
@@ -58,241 +60,204 @@ export default function StatisticsView() {
     if (!user) return
     setLoading(true)
     try {
-      const q = query(collection(db, "ventas"), where("userId", "==", user.uid))
-      const snapshot = await getDocs(q)
-      const salesData = snapshot.docs.map((doc) => ({
+      const salesQuery = query(collection(db, "ventas"), where("userId", "==", user.uid))
+      const salesSnapshot = await getDocs(salesQuery)
+      const salesData = salesSnapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
       })) as Sale[]
-      setSales(salesData)
+
+      // Convertir valores numéricos a float para asegurar cálculos
+      const cleanedSales = salesData.map((sale) => ({
+        ...sale,
+        totalBs: safeFloat(sale.totalBs),
+        totalUsd: safeFloat(sale.totalUsd),
+      }))
+
+      setSales(cleanedSales)
     } catch (error) {
-      console.error("Error loading sales:", error)
+      console.error("Error loading sales data:", error)
     } finally {
       setLoading(false)
     }
   }
 
-  // 🔥 CORRECCIÓN: Se añade .sort() después del .filter()
-  const filteredSales = sales
-    .filter((sale) => {
-      // Asegurarse de que createdAt es válido
-      if (!sale.createdAt || !sale.createdAt.toDate) return false
+  // Filtrado por fecha
+  const filteredSales = sales.filter((sale) => {
+    const saleDate = sale.createdAt.toDate().toISOString().split("T")[0]
+    const matchesFrom = !dateFrom || saleDate >= dateFrom
+    const matchesTo = !dateTo || saleDate <= dateTo
+    return matchesFrom && matchesTo
+  })
 
-      const saleDate = new Date(sale.createdAt.toDate())
-      const from = dateFrom ? new Date(dateFrom) : null
-      const to = dateTo ? new Date(dateTo) : null
-
-      // Ajusta la fecha 'Hasta' al último milisegundo del día
-      if (to) {
-        to.setHours(23, 59, 59, 999)
-      }
-
-      if (from && saleDate < from) return false
-      if (to && saleDate > to) return false
-      return true
+  // 📊 Datos para el Gráfico de Barras: Ventas Diarias
+  const salesByDay = filteredSales.reduce((acc, sale) => {
+    const date = sale.createdAt.toDate().toLocaleDateString("es-VE", {
+      day: "2-digit",
+      month: "2-digit",
     })
-    .sort((a, b) => {
-      // Ordenar DESCENDENTE (más reciente arriba)
-      // b.createdAt.toDate().getTime() > a.createdAt.toDate().getTime()
-      const dateA = a.createdAt.toDate().getTime()
-      const dateB = b.createdAt.toDate().getTime()
-      return dateB - dateA
-    })
+    if (!acc[date]) {
+      acc[date] = { date, totalUsd: 0, totalBs: 0 }
+    }
+    acc[date].totalUsd += sale.totalUsd
+    acc[date].totalBs += sale.totalBs
+    return acc
+  }, {} as Record<string, { date: string; totalUsd: number; totalBs: number }>)
 
-  // Aplicar safeFloat en todos los cálculos de suma
-  const totalSales = filteredSales.length
-  const totalRevenueBs = filteredSales.reduce((sum, sale) => sum + safeFloat(sale.totalBs), 0)
-  const totalRevenueUsd = filteredSales.reduce((sum, sale) => sum + safeFloat(sale.totalUsd), 0)
-  const averageSaleBs = totalSales > 0 ? totalRevenueBs / totalSales : 0
-
-  const paymentMethodData = filteredSales.reduce(
-    (acc, sale) => {
-      const saleTotalBs = safeFloat(sale.totalBs)
-
-      const existing = acc.find((item) => item.name === sale.paymentMethod)
-      if (existing) {
-        existing.value += saleTotalBs
-      } else {
-        acc.push({ name: sale.paymentMethod, value: saleTotalBs })
-      }
-      return acc
-    },
-    [] as Array<{ name: string; value: number }>,
+  const barChartData = Object.values(salesByDay).sort(
+    (a, b) => new Date(a.date.split("/").reverse().join("-")).getTime() - new Date(b.date.split("/").reverse().join("-")).getTime(),
   )
 
-  const dailySalesData = filteredSales.reduce(
-    (acc, sale) => {
-      const date = new Date(sale.createdAt.toDate()).toLocaleDateString("es-VE")
-      const saleTotalBs = safeFloat(sale.totalBs)
+  // 📊 Datos para el Gráfico de Torta: Métodos de Pago
+  const salesByPaymentMethod = filteredSales.reduce((acc, sale) => {
+    const method = sale.paymentMethod
+    if (!acc[method]) {
+      acc[method] = { name: method, value: 0 }
+    }
+    acc[method].value += sale.totalUsd
+    return acc
+  }, {} as Record<string, { name: string; value: number }>)
 
-      const existing = acc.find((item) => item.date === date)
-      if (existing) {
-        existing.total += saleTotalBs
-        existing.count += 1
-      } else {
-        acc.push({ date, total: saleTotalBs, count: 1 })
-      }
-      return acc
-    },
-    [] as Array<{ date: string; total: number; count: number }>,
-  )
+  const pieChartData = Object.values(salesByPaymentMethod).filter((item) => item.value > 0)
 
-  const COLORS = ["#4f35f8", "#ff6b6b", "#4ecdc4", "#45b7d1", "#ffa07a"]
+  // Sumario de Totales
+  const totalUsdSum = filteredSales.reduce((sum, sale) => sum + sale.totalUsd, 0)
+  const totalBsSum = filteredSales.reduce((sum, sale) => sum + sale.totalBs, 0)
+  const totalSalesCount = filteredSales.length
+
+  const COLORS = ["#0088FE", "#00C49F", "#FFBB28", "#FF8042", "#8884d8"]
 
   if (loading) {
     return <div className="text-center py-8">Cargando estadísticas...</div>
   }
 
   return (
-    <div className="space-y-4 md:space-y-6">
+    // ⭐️ AJUSTE DE ANIMACIÓN: motion.div envuelve todo el contenido
+    <motion.div
+      initial={{ opacity: 0, y: 20 }} // Comienza invisible y 20px abajo
+      animate={{ opacity: 1, y: 0 }} // Termina visible y en su posición (subiendo)
+      transition={{ duration: 0.5, ease: "easeOut" }} // Duración de 0.5 segundos
+      className="space-y-4 md:space-y-6"
+    >
       <div>
         <h2 className="text-2xl md:text-3xl font-bold text-foreground mb-2 md:mb-4">Estadísticas de Ventas</h2>
-        <p className="text-sm md:text-base text-muted-foreground">Análisis de tu desempeño de ventas</p>
+        <p className="text-sm md:text-base text-muted-foreground">Análisis de rendimiento de tu negocio.</p>
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-3 md:gap-4">
-        <div className="flex-1">
-          <label className="text-sm font-medium text-foreground">Desde</label>
-          <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="mt-1" />
-        </div>
-        <div className="flex-1">
-          <label className="text-sm font-medium text-foreground">Hasta</label>
-          <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="mt-1" />
-        </div>
+      <div className="flex flex-col md:flex-row gap-4 mb-6">
+        <Input
+          type="date"
+          value={dateFrom}
+          onChange={(e) => setDateFrom(e.target.value)}
+          placeholder="Desde"
+          className="w-full md:w-auto"
+        />
+        <Input
+          type="date"
+          value={dateTo}
+          onChange={(e) => setDateTo(e.target.value)}
+          placeholder="Hasta"
+          className="w-full md:w-auto"
+        />
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+      {filteredSales.length === 0 ? (
         <Card>
-          <CardHeader className="pb-2 px-3 pt-3 md:px-6 md:pt-6">
-            <CardTitle className="text-xs md:text-sm font-medium text-muted-foreground">Total de Ventas</CardTitle>
-          </CardHeader>
-          <CardContent className="px-3 pb-3 md:px-6 md:pb-6">
-            <div className="text-xl md:text-2xl font-bold text-foreground">{totalSales}</div>
+          <CardContent className="py-8 text-center">
+            <p className="text-muted-foreground">No hay datos de ventas en el rango de fechas seleccionado.</p>
           </CardContent>
         </Card>
+      ) : (
+        <div className="space-y-4 md:space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Card>
+              <CardHeader className="px-4 pt-4 md:px-6 md:pt-6">
+                <CardTitle className="text-sm font-medium">Ventas Totales (USD)</CardTitle>
+              </CardHeader>
+              <CardContent className="px-4 pb-4 md:px-6 md:pb-6">
+                <div className="text-2xl md:text-3xl font-bold">${totalUsdSum.toFixed(2)}</div>
+                <p className="text-xs text-muted-foreground mt-1">Suma de ventas en el período</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="px-4 pt-4 md:px-6 md:pt-6">
+                <CardTitle className="text-sm font-medium">Ventas Totales (Bs)</CardTitle>
+              </CardHeader>
+              <CardContent className="px-4 pb-4 md:px-6 md:pb-6">
+                <div className="text-2xl md:text-3xl font-bold text-primary">Bs {totalBsSum.toFixed(2)}</div>
+                <p className="text-xs text-muted-foreground mt-1">Suma de ventas en el período</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="px-4 pt-4 md:px-6 md:pt-6">
+                <CardTitle className="text-sm font-medium">Transacciones</CardTitle>
+              </CardHeader>
+              <CardContent className="px-4 pb-4 md:px-6 md:pb-6">
+                <div className="text-2xl md:text-3xl font-bold">{totalSalesCount}</div>
+                <p className="text-xs text-muted-foreground mt-1">Número total de ventas</p>
+              </CardContent>
+            </Card>
+          </div>
 
-        <Card>
-          <CardHeader className="pb-2 px-3 pt-3 md:px-6 md:pt-6">
-            <CardTitle className="text-xs md:text-sm font-medium text-muted-foreground">Ingresos USD</CardTitle>
-          </CardHeader>
-          <CardContent className="px-3 pb-3 md:px-6 md:pb-6">
-            <div className="text-xl md:text-2xl font-bold text-foreground">${totalRevenueUsd.toFixed(2)}</div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2 px-3 pt-3 md:px-6 md:pt-6">
-            <CardTitle className="text-xs md:text-sm font-medium text-muted-foreground">Ingresos Bs</CardTitle>
-          </CardHeader>
-          <CardContent className="px-3 pb-3 md:px-6 md:pb-6">
-            <div className="text-xl md:text-2xl font-bold text-primary">Bs {totalRevenueBs.toFixed(2)}</div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2 px-3 pt-3 md:px-6 md:pt-6">
-            <CardTitle className="text-xs md:text-sm font-medium text-muted-foreground">Promedio por Venta</CardTitle>
-          </CardHeader>
-          <CardContent className="px-3 pb-3 md:px-6 md:pb-6">
-            <div className="text-xl md:text-2xl font-bold text-foreground">Bs {averageSaleBs.toFixed(2)}</div>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
-        <Card>
-          <CardHeader className="px-4 pt-4 md:px-6 md:pt-6">
-            <CardTitle className="text-base md:text-lg">Ventas por Día</CardTitle>
-          </CardHeader>
-          <CardContent className="px-2 md:px-6">
-            {dailySalesData.length === 0 ? (
-              <p className="text-center text-muted-foreground py-8 text-sm">No hay datos</p>
-            ) : (
-              <ResponsiveContainer width="100%" height={250}>
-                <BarChart data={dailySalesData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                  <YAxis tick={{ fontSize: 12 }} />
-                  <Tooltip />
-                  <Legend wrapperStyle={{ fontSize: "12px" }} />
-                  <Bar dataKey="total" fill="#4f35f8" name="Total Bs" />
+          <Card>
+            <CardHeader className="px-4 pt-4 md:px-6 md:pt-6">
+              <CardTitle className="text-base md:text-lg">Ventas Diarias (USD)</CardTitle>
+            </CardHeader>
+            <CardContent className="h-64 px-4 pb-4 md:px-6 md:pb-6">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={barChartData} margin={{ top: 10, right: 0, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#ccc" />
+                  <XAxis dataKey="date" stroke="#888888" fontSize={10} />
+                  <YAxis stroke="#888888" fontSize={10} tickFormatter={(value) => `$${value.toFixed(0)}`} />
+                  <Tooltip
+                    formatter={(value: number) => [`$${value.toFixed(2)}`, "Total USD"]}
+                    labelFormatter={(label) => `Fecha: ${label}`}
+                  />
+                  <Bar dataKey="totalUsd" fill="#8884d8" name="Ventas USD" />
                 </BarChart>
               </ResponsiveContainer>
-            )}
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardHeader className="px-4 pt-4 md:px-6 md:pt-6">
-            <CardTitle className="text-base md:text-lg">Métodos de Pago</CardTitle>
-          </CardHeader>
-          <CardContent className="px-2 md:px-6">
-            {paymentMethodData.length === 0 ? (
-              <p className="text-center text-muted-foreground py-8 text-sm">No hay datos</p>
-            ) : (
-              <ResponsiveContainer width="100%" height={250}>
+          <Card>
+            <CardHeader className="px-4 pt-4 md:px-6 md:pt-6">
+              <CardTitle className="text-base md:text-lg">Distribución por Método de Pago</CardTitle>
+            </CardHeader>
+            <CardContent className="h-64 px-4 pb-4 md:px-6 md:pb-6">
+              <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
-                    data={paymentMethodData}
+                    data={pieChartData}
+                    dataKey="value"
+                    nameKey="name"
                     cx="50%"
                     cy="50%"
-                    labelLine={false}
-                    label={({ name, value }) => `${name}: Bs ${(value || 0).toFixed(0)}`}
                     outerRadius={80}
                     fill="#8884d8"
-                    dataKey="value"
+                    label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
                   >
-                    {paymentMethodData.map((entry, index) => (
+                    {pieChartData.map((_entry, index) => (
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}
                   </Pie>
-                  <Tooltip />
+                  <Tooltip
+                    formatter={(value: number, name: string) => [
+                      `$${value.toFixed(2)}`,
+                      name.charAt(0).toUpperCase() + name.slice(1),
+                    ]}
+                  />
+                  <Legend layout="horizontal" verticalAlign="bottom" align="center" iconType="circle" />
                 </PieChart>
               </ResponsiveContainer>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+            </CardContent>
+          </Card>
 
-      <Card>
-        <CardHeader className="px-4 pt-4 md:px-6 md:pt-6">
-          <CardTitle className="text-base md:text-lg">Detalle de Ventas</CardTitle>
-        </CardHeader>
-        <CardContent className="px-4 md:px-6">
-          {filteredSales.length === 0 ? (
-            <p className="text-center text-muted-foreground py-8 text-sm">No hay ventas en este período</p>
-          ) : (
-            <>
-              {/* Vista de tarjetas para móvil */}
-              <div className="lg:hidden space-y-3">
-                {filteredSales.map((sale) => (
-                  <div key={sale.id} className="border border-border rounded-lg p-3 space-y-2">
-                    <div className="flex justify-between items-start">
-                      <span className="text-sm font-medium">
-                        {new Date(sale.createdAt.toDate()).toLocaleDateString("es-VE")}
-                      </span>
-                      <span className="text-xs bg-muted px-2 py-1 rounded">{sale.paymentMethod}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Productos:</span>
-                      <span className="font-medium">{sale.items.length}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Total USD:</span>
-                      <span className="font-medium">${(Number.parseFloat(String(sale.totalUsd)) || 0).toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Total Bs:</span>
-                      <span className="font-semibold text-primary">
-                        Bs {(Number.parseFloat(String(sale.totalBs)) || 0).toFixed(2)}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Vista de tabla para desktop */}
-              <div className="hidden lg:block overflow-x-auto">
+          <Card>
+            <CardHeader className="px-4 pt-4 md:px-6 md:pt-6">
+              <CardTitle className="text-base md:text-lg">Detalle de Ventas</CardTitle>
+            </CardHeader>
+            <CardContent className="px-4 pb-4 md:px-6 md:pb-6">
+              <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-border">
@@ -306,13 +271,15 @@ export default function StatisticsView() {
                   <tbody>
                     {filteredSales.map((sale) => (
                       <tr key={sale.id} className="border-b border-border hover:bg-muted/50">
-                        <td className="py-3 px-4">{new Date(sale.createdAt.toDate()).toLocaleDateString("es-VE")}</td>
+                        <td className="py-3 px-4">
+                          {new Date(sale.createdAt.toDate()).toLocaleDateString("es-VE")}
+                        </td>
                         <td className="text-right py-3 px-4">{sale.items.length}</td>
                         <td className="text-right py-3 px-4">
-                          ${(Number.parseFloat(String(sale.totalUsd)) || 0).toFixed(2)}
+                          ${(safeFloat(sale.totalUsd) || 0).toFixed(2)}
                         </td>
                         <td className="text-right py-3 px-4 font-semibold text-primary">
-                          Bs {(Number.parseFloat(String(sale.totalBs)) || 0).toFixed(2)}
+                          Bs {(safeFloat(sale.totalBs) || 0).toFixed(2)}
                         </td>
                         <td className="py-3 px-4">{sale.paymentMethod}</td>
                       </tr>
@@ -320,10 +287,10 @@ export default function StatisticsView() {
                   </tbody>
                 </table>
               </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
-    </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+    </motion.div>
   )
 }
