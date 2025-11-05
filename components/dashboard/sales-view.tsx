@@ -7,7 +7,7 @@ import { collection, query, where, getDocs, addDoc, updateDoc, doc, Timestamp } 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Trash2, Plus, Minus, Scan } from "lucide-react"
+import { Trash2, Plus, Minus, Scan, ShoppingCart, Search } from "lucide-react"
 import { initBarcodeScanner } from "@/lib/barcode-scanner"
 import { getBCVRate } from "@/lib/bcv-service"
 
@@ -44,6 +44,8 @@ export default function SalesView() {
   const [scannerActive, setScannerActive] = useState(false)
   const [barcodeInput, setBarcodeInput] = useState("")
   const [loading, setLoading] = useState(true)
+  const [showCart, setShowCart] = useState(false)
+  const [searchTerm, setSearchTerm] = useState("")
 
   // Métodos de pago
   const [paymentMethod, setPaymentMethod] = useState<"debit" | "cash" | "transfer" | "mixed">("cash")
@@ -70,15 +72,15 @@ export default function SalesView() {
     const totalEnBs = totalUsd * bcvRate
 
     // Si el usuario escribe en USD, calculamos el resto en Bs
-    if (mixedUsd && !isNaN(parseFloat(mixedUsd)) && document.activeElement?.id === "usd-input") {
-      const usd = parseFloat(mixedUsd)
+    if (mixedUsd && !isNaN(Number.parseFloat(mixedUsd)) && document.activeElement?.id === "usd-input") {
+      const usd = Number.parseFloat(mixedUsd)
       const restanteBs = Math.max(totalEnBs - usd * bcvRate, 0)
       setMixedBs(restanteBs.toFixed(2))
     }
 
     // Si el usuario escribe en Bs, calculamos el resto en USD
-    if (mixedBs && !isNaN(parseFloat(mixedBs)) && document.activeElement?.id === "bs-input") {
-      const bs = parseFloat(mixedBs)
+    if (mixedBs && !isNaN(Number.parseFloat(mixedBs)) && document.activeElement?.id === "bs-input") {
+      const bs = Number.parseFloat(mixedBs)
       const restanteUsd = Math.max((totalEnBs - bs) / bcvRate, 0)
       setMixedUsd(restanteUsd.toFixed(2))
     }
@@ -115,7 +117,7 @@ export default function SalesView() {
       case "weight": {
         // Precio de venta = Costo Unitario (costUsd) * (1 + Ganancia %)
         const salePrice = product.costUsd * (1 + profitDecimal)
-        return salePrice;
+        return salePrice
       }
       case "area": {
         // Precio de venta m² = Precio Base (PRECIO_M2) * (1 + Ganancia %)
@@ -136,33 +138,26 @@ export default function SalesView() {
     if (product.saleType === "weight") {
       const rawKg = prompt(`Ingresa cantidad de kg de ${product.name}:`, "1")
       if (!rawKg) return
-      kg = parseFloat(rawKg)
+      kg = Number.parseFloat(rawKg)
       if (isNaN(kg) || kg <= 0) return alert("Kg inválidos")
       quantity = kg
     } else if (product.saleType === "area") {
       const rawW = prompt(`Ingresa ancho en cm de ${product.name}:`, "100")
       const rawH = prompt(`Ingresa alto en cm de ${product.name}:`, "100")
       if (!rawW || !rawH) return
-      widthCm = parseFloat(rawW)
-      heightCm = parseFloat(rawH)
-      if (isNaN(widthCm) || isNaN(heightCm) || widthCm <= 0 || heightCm <= 0)
-        return alert("Dimensiones inválidas")
+      widthCm = Number.parseFloat(rawW)
+      heightCm = Number.parseFloat(rawH)
+      if (isNaN(widthCm) || isNaN(heightCm) || widthCm <= 0 || heightCm <= 0) return alert("Dimensiones inválidas")
       quantity = (widthCm / 100) * (heightCm / 100)
     }
 
     addToCart(product, quantity, widthCm, heightCm, kg)
   }
 
-  const addToCart = (
-    product: Product,
-    quantity: number,
-    widthCm?: number,
-    heightCm?: number,
-    kg?: number
-  ) => {
+  const addToCart = (product: Product, quantity: number, widthCm?: number, heightCm?: number, kg?: number) => {
     const salePriceUnit = calculateSalePrice(product) // Precio por unidad, kg, o m²
     const totalPriceUsd = salePriceUnit * quantity
-    
+
     if (product.saleType !== "area" && quantity > product.quantity) {
       alert("No hay suficiente inventario")
       return
@@ -180,7 +175,7 @@ export default function SalesView() {
       // Si el ítem ya existe, se suma la cantidad
       existingItem.quantity = Number(existingItem.quantity) + Number(quantity)
       // Se recalcula el precio Bs (Precio Unitario * Nueva Cantidad * Tasa BCV)
-      existingItem.priceBs = salePriceUnit * existingItem.quantity * bcvRate 
+      existingItem.priceBs = salePriceUnit * existingItem.quantity * bcvRate
       setCart([...cart])
     } else {
       const item: CartItem = {
@@ -220,7 +215,7 @@ export default function SalesView() {
     // item.priceUsd contiene el precio unitario
     item.quantity = newQuantity
     // Se recalcula el precio Bs (Precio Unitario * Nueva Cantidad * Tasa BCV)
-    item.priceBs = item.priceUsd * newQuantity * bcvRate 
+    item.priceBs = item.priceUsd * newQuantity * bcvRate
     setCart([...cart])
   }
 
@@ -239,8 +234,8 @@ export default function SalesView() {
     if (cart.length === 0) return alert("El carrito está vacío")
 
     if (paymentMethod === "mixed") {
-      const usd = parseFloat(mixedUsd || "0")
-      const bs = parseFloat(mixedBs || "0")
+      const usd = Number.parseFloat(mixedUsd || "0")
+      const bs = Number.parseFloat(mixedBs || "0")
       const combined = usd * bcvRate + bs
       const roundedTotal = Number(totalBs.toFixed(2))
       const sum = Number(combined.toFixed(2))
@@ -253,11 +248,11 @@ export default function SalesView() {
       const saleData: any = {
         userId: user.uid,
         // Almacenar el total de la línea en USD para la base de datos
-        items: cart.map(item => ({
-            ...item,
-            // Guardar el total USD de la línea para evitar errores en la factura
-            totalUsdLine: item.priceUsd * item.quantity, 
-            priceUsd: item.priceUsd, // El precio unitario sigue siendo priceUsd
+        items: cart.map((item) => ({
+          ...item,
+          // Guardar el total USD de la línea para evitar errores en la factura
+          totalUsdLine: item.priceUsd * item.quantity,
+          priceUsd: item.priceUsd, // El precio unitario sigue siendo priceUsd
         })),
         totalBs,
         totalUsd,
@@ -269,8 +264,8 @@ export default function SalesView() {
 
       if (paymentMethod === "mixed") {
         saleData.paymentBreakdown = {
-          pagoUsd: parseFloat(mixedUsd || "0"),
-          pagoBs: parseFloat(mixedBs || "0"),
+          pagoUsd: Number.parseFloat(mixedUsd || "0"),
+          pagoBs: Number.parseFloat(mixedBs || "0"),
         }
       }
 
@@ -296,191 +291,263 @@ export default function SalesView() {
     }
   }
 
+  const filteredProducts = products.filter(
+    (product) =>
+      product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      product.category.toLowerCase().includes(searchTerm.toLowerCase()),
+  )
+
   return (
-    <div className="grid grid-cols-3 gap-6">
-      <div className="col-span-2 space-y-6">
-        <div className="flex items-center justify-between">
-          <h2 className="text-3xl font-bold">Punto de Venta</h2>
-          <Button onClick={() => setScannerActive(!scannerActive)} variant={scannerActive ? "default" : "outline"}>
-            <Scan className="w-4 h-4" />
-            {scannerActive ? "Escáner Activo" : "Activar Escáner"}
-          </Button>
-        </div>
+    <div className="relative">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
+        <div className="lg:col-span-2 space-y-4 lg:space-y-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-2xl lg:text-3xl font-bold">Punto de Venta</h2>
+            <Button
+              onClick={() => setScannerActive(!scannerActive)}
+              variant={scannerActive ? "default" : "outline"}
+              size="sm"
+              className="lg:size-default"
+            >
+              <Scan className="w-4 h-4 lg:mr-2" />
+              <span className="hidden lg:inline">{scannerActive ? "Escáner Activo" : "Activar Escáner"}</span>
+            </Button>
+          </div>
 
-        {scannerActive && (
-          <Card className="border-primary/50 bg-primary/5">
-            <CardContent>
-              <Input
-                autoFocus
-                placeholder="Escanea código..."
-                value={barcodeInput}
-                onChange={(e) => setBarcodeInput(e.target.value)}
-                className="bg-background"
+          {scannerActive && (
+            <Card className="border-primary/50 bg-primary/5">
+              <CardContent className="pt-4">
+                <Input
+                  autoFocus
+                  placeholder="Escanea código..."
+                  value={barcodeInput}
+                  onChange={(e) => setBarcodeInput(e.target.value)}
+                  className="bg-background"
+                />
+              </CardContent>
+            </Card>
+          )}
+
+          <div className="mb-6">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+              <input
+                type="text"
+                placeholder="Buscar productos..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
-            </CardContent>
-          </Card>
-        )}
+            </div>
+            {searchTerm && (
+              <p className="text-sm text-gray-600 mt-2">{filteredProducts.length} producto(s) encontrado(s)</p>
+            )}
+          </div>
 
-        <div>
-          <h3 className="text-lg font-semibold">Productos Disponibles</h3>
-          <div className="grid grid-cols-2 gap-4">
-            {products.map((product) => {
-              const salePrice = calculateSalePrice(product) // 🔥 Usa la función CORREGIDA
-              const salePriceBs = salePrice * bcvRate
-              return (
-                <Card key={product.id}>
-                  <CardContent>
-                    <h4 className="font-semibold">{product.name}</h4>
-                    <p className="text-sm text-muted-foreground">{product.category}</p>
-                    <div className="space-y-1 mb-3">
-                      <div className="flex justify-between text-sm">
-                        <span>Precio USD:</span>
-                        <span>${salePrice.toFixed(2)}</span>
+          <div>
+            <h3 className="text-base lg:text-lg font-semibold mb-3">Productos Disponibles</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 lg:gap-4">
+              {filteredProducts.map((product) => {
+                const salePrice = calculateSalePrice(product)
+                const salePriceBs = salePrice * bcvRate
+                return (
+                  <Card key={product.id} className="hover:shadow-md transition-shadow">
+                    <CardContent className="pt-4">
+                      <div className="mb-3">
+                        <h4 className="font-semibold text-base">{product.name}</h4>
+                        <p className="text-xs text-muted-foreground">{product.category}</p>
                       </div>
-                      <div className="flex justify-between text-sm">
-                        <span>Precio Bs:</span>
-                        <span>Bs {salePriceBs.toFixed(2)}</span>
+                      <div className="space-y-1 mb-3 text-sm">
+                        <div className="flex justify-between items-center">
+                          <span className="text-muted-foreground">USD:</span>
+                          <span className="font-semibold">${salePrice.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-muted-foreground">Bs:</span>
+                          <span className="font-semibold">Bs {salePriceBs.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-xs pt-1 border-t">
+                          <span className="text-muted-foreground">
+                            Stock: <span className="font-medium text-foreground">{product.quantity}</span>
+                          </span>
+                          <span className="text-muted-foreground">
+                            Tipo: <span className="font-medium text-foreground">{product.saleType}</span>
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex justify-between text-sm">
-                        <span>Stock:</span>
-                        <span>{product.quantity}</span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span>Tipo:</span>
-                        <span>{product.saleType}</span>
-                      </div>
-                    </div>
-                    <Button onClick={() => openAddDialog(product)} className="w-full bg-primary hover:bg-primary/90">
-                      Agregar al Carrito
-                    </Button>
-                  </CardContent>
-                </Card>
-              )
-            })}
+                      <Button
+                        onClick={() => openAddDialog(product)}
+                        className="w-full bg-primary hover:bg-primary/90"
+                        size="sm"
+                      >
+                        Agregar
+                      </Button>
+                    </CardContent>
+                  </Card>
+                )
+              })}
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="col-span-1">
-        <Card className="sticky top-6">
-          <CardHeader>
-            <CardTitle>Carrito de Ventas</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {cart.length === 0 ? (
-              <p className="text-center text-muted-foreground py-8">Carrito vacío</p>
-            ) : (
-              <div className="space-y-3 max-h-96 overflow-y-auto">
-                {cart.map((item) => (
-                  <div key={`${item.productId}-${item.saleType}-${item.widthCm || 0}-${item.heightCm || 0}`} className="border border-border rounded-lg p-3">
-                    <div className="flex justify-between items-start mb-2">
-                      <h4 className="font-semibold text-sm">{item.name}</h4>
-                      <button
-                        onClick={() => removeFromCart(item.productId)}
-                        className="text-destructive hover:bg-destructive/10 p-1 rounded"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
+        <button
+          onClick={() => setShowCart(true)}
+          className="lg:hidden fixed bottom-6 right-6 z-50 bg-primary text-primary-foreground rounded-full p-4 shadow-lg hover:bg-primary/90 transition-all"
+        >
+          <ShoppingCart className="w-6 h-6" />
+          {cart.length > 0 && (
+            <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-6 h-6 flex items-center justify-center font-semibold">
+              {cart.length}
+            </span>
+          )}
+        </button>
 
-                    <div className="flex items-center gap-2 mb-2">
-                      <button
-                        onClick={() => updateQuantity(item, Number(item.quantity) - 1)}
-                        className="p-1 hover:bg-muted rounded"
-                      >
-                        <Minus className="w-4 h-4" />
-                      </button>
-                      <Input
-                        type="number"
-                        value={item.quantity}
-                        onChange={(e) => updateQuantity(item, parseFloat(e.target.value))}
-                        className="w-12 text-center"
-                      />
-                      <button
-                        onClick={() => updateQuantity(item, Number(item.quantity) + 1)}
-                        className="p-1 hover:bg-muted rounded"
-                      >
-                        <Plus className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                    <div className="text-sm text-muted-foreground">
-                      Bs {(item.priceBs).toFixed(2)}
-                      {item.saleType === "area" && ` — ${item.widthCm}cm x ${item.heightCm}cm`}
-                      {item.saleType === "weight" && ` — ${item.kg} kg`}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="border-t border-border pt-4 space-y-3">
-              {discount > 0 && (
-                <div className="flex justify-between text-green-600">
-                  <span>Descuento (30 % efectivo USD):</span>
-                  <span>- ${ (baseTotalUsd * 0.3).toFixed(2) }</span>
+        <div
+          className={`
+          lg:col-span-1
+          fixed lg:static
+          inset-0 lg:inset-auto
+          z-50 lg:z-auto
+          bg-black/50 lg:bg-transparent
+          ${showCart ? "block" : "hidden"} lg:block
+        `}
+        >
+          <div className="h-full lg:h-auto flex items-end lg:items-start justify-center lg:justify-start p-4 lg:p-0">
+            <Card className="w-full max-w-lg lg:max-w-none lg:sticky lg:top-6 max-h-[90vh] lg:max-h-[calc(100vh-3rem)] flex flex-col">
+              <CardHeader className="flex-shrink-0">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-lg lg:text-xl">Carrito de Ventas</CardTitle>
+                  <Button variant="ghost" size="sm" onClick={() => setShowCart(false)} className="lg:hidden">
+                    ✕
+                  </Button>
                 </div>
-              )}
+              </CardHeader>
+              <CardContent className="space-y-4 flex-1 overflow-hidden flex flex-col">
+                {cart.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8">Carrito vacío</p>
+                ) : (
+                  <div className="space-y-3 overflow-y-auto flex-1 pr-2">
+                    {cart.map((item) => (
+                      <div
+                        key={`${item.productId}-${item.saleType}-${item.widthCm || 0}-${item.heightCm || 0}`}
+                        className="border border-border rounded-lg p-3"
+                      >
+                        <div className="flex justify-between items-start mb-2">
+                          <h4 className="font-semibold text-sm">{item.name}</h4>
+                          <button
+                            onClick={() => removeFromCart(item.productId)}
+                            className="text-destructive hover:bg-destructive/10 p-1 rounded"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
 
-              <div className="flex justify-between">
-                <span>Total USD:</span>
-                <span>${totalUsd.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Total Bs:</span>
-                <span>Bs {totalBs.toFixed(2)}</span>
-              </div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <button
+                            onClick={() => updateQuantity(item, Number(item.quantity) - 1)}
+                            className="p-1 hover:bg-muted rounded"
+                          >
+                            <Minus className="w-4 h-4" />
+                          </button>
+                          <Input
+                            type="number"
+                            value={item.quantity}
+                            onChange={(e) => updateQuantity(item, Number.parseFloat(e.target.value))}
+                            className="w-16 text-center text-sm h-8"
+                          />
+                          <button
+                            onClick={() => updateQuantity(item, Number(item.quantity) + 1)}
+                            className="p-1 hover:bg-muted rounded"
+                          >
+                            <Plus className="w-4 h-4" />
+                          </button>
+                        </div>
 
-              <div>
-                <label className="text-sm">Método de Pago</label>
-                <select
-                  value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value as any)}
-                  className="w-full px-3 py-2 border border-input rounded-md bg-background mt-2"
-                >
-                  <option value="debit">Débito</option>
-                  <option value="cash">Efectivo (USD)</option>
-                  <option value="transfer">Transferencia</option>
-                  <option value="mixed">Mixto</option>
-                </select>
-              </div>
+                        <div className="text-sm text-muted-foreground">
+                          Bs {item.priceBs.toFixed(2)}
+                          {item.saleType === "area" && ` — ${item.widthCm}cm x ${item.heightCm}cm`}
+                          {item.saleType === "weight" && ` — ${item.kg} kg`}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
-              {paymentMethod === "mixed" && (
-                <div className="grid grid-cols-2 gap-2">
+                <div className="border-t border-border pt-4 space-y-3 flex-shrink-0">
+                  {discount > 0 && (
+                    <div className="flex justify-between text-green-600 text-sm">
+                      <span>Descuento (30% efectivo USD):</span>
+                      <span>- ${(baseTotalUsd * 0.3).toFixed(2)}</span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-between font-semibold">
+                    <span>Total USD:</span>
+                    <span>${totalUsd.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between font-semibold">
+                    <span>Total Bs:</span>
+                    <span>Bs {totalBs.toFixed(2)}</span>
+                  </div>
+
                   <div>
-                    <label className="text-xs text-muted-foreground">Efectivo (USD)</label>
-                    <Input
-                      id="usd-input"
-                      value={mixedUsd}
-                      onChange={(e) => setMixedUsd(e.target.value)}
-                      placeholder="0.00"
-                      type="number"
-                      step="0.01"
-                    />
+                    <label className="text-sm font-medium">Método de Pago</label>
+                    <select
+                      value={paymentMethod}
+                      onChange={(e) => setPaymentMethod(e.target.value as any)}
+                      className="w-full px-3 py-2 border border-input rounded-md bg-background mt-2 text-sm"
+                    >
+                      <option value="debit">Débito</option>
+                      <option value="cash">Efectivo (USD)</option>
+                      <option value="transfer">Transferencia</option>
+                      <option value="mixed">Mixto</option>
+                    </select>
                   </div>
-                  <div>
-                    <label className="text-xs text-muted-foreground">Transferencia (Bs)</label>
-                    <Input
-                      id="bs-input"
-                      value={mixedBs}
-                      onChange={(e) => setMixedBs(e.target.value)}
-                      placeholder="0.00"
-                      type="number"
-                      step="0.01"
-                    />
-                  </div>
-                  <div className="col-span-2 text-xs text-muted-foreground">
-                    Se calcula automáticamente el monto restante según la tasa BCV.
-                  </div>
+
+                  {paymentMethod === "mixed" && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-xs text-muted-foreground">Efectivo (USD)</label>
+                        <Input
+                          id="usd-input"
+                          value={mixedUsd}
+                          onChange={(e) => setMixedUsd(e.target.value)}
+                          placeholder="0.00"
+                          type="number"
+                          step="0.01"
+                          className="text-sm h-9"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted-foreground">Transferencia (Bs)</label>
+                        <Input
+                          id="bs-input"
+                          value={mixedBs}
+                          onChange={(e) => setMixedBs(e.target.value)}
+                          placeholder="0.00"
+                          type="number"
+                          step="0.01"
+                          className="text-sm h-9"
+                        />
+                      </div>
+                      <div className="col-span-2 text-xs text-muted-foreground">
+                        Se calcula automáticamente el monto restante según la tasa BCV.
+                      </div>
+                    </div>
+                  )}
+
+                  <Button
+                    onClick={handleCheckout}
+                    disabled={cart.length === 0}
+                    className="w-full bg-accent hover:bg-accent/90"
+                  >
+                    Confirmar Venta
+                  </Button>
                 </div>
-              )}
-
-              <Button onClick={handleCheckout} disabled={cart.length === 0} className="w-full bg-accent hover:bg-accent/90">
-                Confirmar Venta
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
       </div>
     </div>
   )

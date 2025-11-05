@@ -69,9 +69,7 @@ export default function ReportsView() {
       })) as Sale[]
 
       // 🔥 Ordenar ventas de la más reciente a la más antigua
-      const sortedSales = salesData.sort(
-        (a, b) => b.createdAt.toDate() - a.createdAt.toDate()
-      )
+      const sortedSales = salesData.sort((a, b) => b.createdAt.toDate() - a.createdAt.toDate())
 
       setSales(sortedSales)
     } catch (error) {
@@ -100,22 +98,22 @@ export default function ReportsView() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
       <div>
-        <h2 className="text-3xl font-bold text-foreground mb-4">Reportes</h2>
-        <p className="text-muted-foreground">Genera reportes e invoices en PDF</p>
+        <h2 className="text-2xl md:text-3xl font-bold text-foreground mb-2 md:mb-4">Reportes</h2>
+        <p className="text-sm md:text-base text-muted-foreground">Genera reportes e invoices en PDF</p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="w-5 h-5" />
+          <CardHeader className="px-4 pt-4 md:px-6 md:pt-6">
+            <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+              <FileText className="w-4 h-4 md:w-5 md:h-5" />
               Reporte de Inventario
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground mb-4">
+          <CardContent className="px-4 pb-4 md:px-6 md:pb-6">
+            <p className="text-xs md:text-sm text-muted-foreground mb-4">
               Descarga un reporte completo de tu inventario actual con precios en USD y Bs.
             </p>
             <Button onClick={handleGenerateInventoryReport} className="w-full gap-2 bg-primary hover:bg-primary/90">
@@ -126,14 +124,14 @@ export default function ReportsView() {
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="w-5 h-5" />
+          <CardHeader className="px-4 pt-4 md:px-6 md:pt-6">
+            <CardTitle className="flex items-center gap-2 text-base md:text-lg">
+              <FileText className="w-4 h-4 md:w-5 md:h-5" />
               Etiquetas de Productos
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground mb-4">
+          <CardContent className="px-4 pb-4 md:px-6 md:pb-6">
+            <p className="text-xs md:text-sm text-muted-foreground mb-4">
               Genera etiquetas imprimibles con los precios de tus productos.
             </p>
             <Button onClick={handleGenerateLabels} className="w-full gap-2 bg-accent hover:bg-accent/90">
@@ -145,51 +143,86 @@ export default function ReportsView() {
       </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle>Historial de Ventas</CardTitle>
+        <CardHeader className="px-4 pt-4 md:px-6 md:pt-6">
+          <CardTitle className="text-base md:text-lg">Historial de Ventas</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-4 md:px-6">
           {sales.length === 0 ? (
-            <p className="text-center text-muted-foreground py-8">No hay ventas registradas</p>
+            <p className="text-center text-muted-foreground py-8 text-sm">No hay ventas registradas</p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border">
-                    <th className="text-left py-3 px-4">Fecha</th>
-                    <th className="text-right py-3 px-4">Total USD</th>
-                    <th className="text-right py-3 px-4">Total Bs</th>
-                    <th className="text-left py-3 px-4">Método de Pago</th>
-                    <th className="text-center py-3 px-4">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sales.map((sale) => (
-                    <tr key={sale.id} className="border-b border-border hover:bg-muted/50">
-                      <td className="py-3 px-4">{new Date(sale.createdAt.toDate()).toLocaleDateString("es-VE")}</td>
-                      <td className="text-right py-3 px-4">${sale.totalUsd.toFixed(2)}</td>
-                      <td className="text-right py-3 px-4 font-semibold text-primary">Bs {sale.totalBs.toFixed(2)}</td>
-                      <td className="py-3 px-4">{sale.paymentMethod}</td>
-                      <td className="py-3 px-4 text-center">
-                        <Button
-                          onClick={() => handleGenerateInvoice(sale)}
-                          size="sm"
-                          variant="outline"
-                          className="gap-1"
-                        >
-                          <Download className="w-3 h-3" />
-                          Factura
-                        </Button>
-                      </td>
+            <>
+              {/* Vista de tarjetas para móvil */}
+              <div className="lg:hidden space-y-3">
+                {sales.map((sale) => (
+                  <div key={sale.id} className="border border-border rounded-lg p-3 space-y-2">
+                    <div className="flex justify-between items-start mb-2">
+                      <span className="text-sm font-medium">
+                        {new Date(sale.createdAt.toDate()).toLocaleDateString("es-VE")}
+                      </span>
+                      <span className="text-xs bg-muted px-2 py-1 rounded">{sale.paymentMethod}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Total USD:</span>
+                      <span className="font-medium">${sale.totalUsd.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm mb-3">
+                      <span className="text-muted-foreground">Total Bs:</span>
+                      <span className="font-semibold text-primary">Bs {sale.totalBs.toFixed(2)}</span>
+                    </div>
+                    <Button
+                      onClick={() => handleGenerateInvoice(sale)}
+                      size="sm"
+                      variant="outline"
+                      className="w-full gap-1"
+                    >
+                      <Download className="w-3 h-3" />
+                      Descargar Factura
+                    </Button>
+                  </div>
+                ))}
+              </div>
+
+              {/* Vista de tabla para desktop */}
+              <div className="hidden lg:block overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="text-left py-3 px-4">Fecha</th>
+                      <th className="text-right py-3 px-4">Total USD</th>
+                      <th className="text-right py-3 px-4">Total Bs</th>
+                      <th className="text-left py-3 px-4">Método de Pago</th>
+                      <th className="text-center py-3 px-4">Acciones</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {sales.map((sale) => (
+                      <tr key={sale.id} className="border-b border-border hover:bg-muted/50">
+                        <td className="py-3 px-4">{new Date(sale.createdAt.toDate()).toLocaleDateString("es-VE")}</td>
+                        <td className="text-right py-3 px-4">${sale.totalUsd.toFixed(2)}</td>
+                        <td className="text-right py-3 px-4 font-semibold text-primary">
+                          Bs {sale.totalBs.toFixed(2)}
+                        </td>
+                        <td className="py-3 px-4">{sale.paymentMethod}</td>
+                        <td className="py-3 px-4 text-center">
+                          <Button
+                            onClick={() => handleGenerateInvoice(sale)}
+                            size="sm"
+                            variant="outline"
+                            className="gap-1"
+                          >
+                            <Download className="w-3 h-3" />
+                            Factura
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
     </div>
   )
 }
- 

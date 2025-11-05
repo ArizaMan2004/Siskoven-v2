@@ -11,6 +11,12 @@ export const metadata: Metadata = {
   title: "Siskoven - Inventory Management",
   description: "Professional inventory management system with BCV exchange rate integration",
   generator: "Jesus Ariza",
+  // ⭐️ CORRECCIÓN CLAVE: Define el viewport para la adaptabilidad
+  viewport: {
+    width: 'device-width',
+    initialScale: 1,
+    maximumScale: 1,
+  },
 }
 
 export default function RootLayout({
