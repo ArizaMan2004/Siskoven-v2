@@ -14,7 +14,6 @@ export default function Sidebar({ activeView, setActiveView }: SidebarProps) {
     { id: "sales", label: "Punto de Venta", icon: ShoppingCart },
     { id: "statistics", label: "Estadísticas", icon: TrendingUp },
     { id: "reports", label: "Reportes", icon: BarChart3 },
-    { id: "settings", label: "Configuración", icon: Settings },
   ]
 
   return (
