@@ -8,9 +8,9 @@ const _geist = Geist({ subsets: ["latin"] })
 const _geistMono = Geist_Mono({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "Venko - Inventory Management",
+  title: "Siskoven - Inventory Management",
   description: "Professional inventory management system with BCV exchange rate integration",
-  generator: "v0.app",
+  generator: "Jesus Ariza",
 }
 
 export default function RootLayout({

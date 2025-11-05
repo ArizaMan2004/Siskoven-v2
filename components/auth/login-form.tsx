@@ -34,9 +34,9 @@ export default function LoginForm() {
         <CardHeader className="space-y-2">
           <div className="flex items-center gap-2 mb-4">
             <div className="w-10 h-10 bg-primary rounded-lg flex items-center justify-center">
-              <span className="text-primary-foreground font-bold text-lg">V</span>
+              <span className="text-primary-foreground font-bold text-lg">S</span>
             </div>
-            <span className="text-2xl font-bold text-primary">Venko</span>
+            <span className="text-2xl font-bold text-primary">Siskoven</span>
           </div>
           <CardTitle>Iniciar Sesión</CardTitle>
           <CardDescription>Accede a tu sistema de inventario</CardDescription>
