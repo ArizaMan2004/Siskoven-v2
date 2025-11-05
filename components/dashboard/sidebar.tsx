@@ -24,7 +24,7 @@ export default function Sidebar({ activeView, setActiveView }: SidebarProps) {
   <div className="w-10 h-10 flex items-center justify-center">
     <img
       src="/logo.png"
-      alt="Logo Siskoven"
+      alt="logo Siskoven"
       className="w-full h-full object-contain"
     />
   </div>
