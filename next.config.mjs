@@ -1,41 +1,31 @@
-import { fileURLToPath } from 'url';
-import path from 'path';
-// 1. IMPORTAR next-pwa aquí, de forma asíncrona si es necesario, 
-// o simplemente el import estático si next-pwa lo permite
-import NextPWA from 'next-pwa'; // <-- ASUME que next-pwa usa export default
+import withPWA from 'next-pwa';
 
-// Necesitas una forma de obtener el 'withPWA' que es la función.
-// Como next-pwa exporta una función, la forma más limpia es esta:
-const withPWA = NextPWA({
-    dest: 'public',
-    register: true,
-    skipWaiting: true,
-    // Puedes dejar 'disable: process.env.NODE_ENV === 'development'' si lo quieres
-    disable: process.env.NODE_ENV === 'development',
+// Definimos la función de envoltura PWA con la configuración deseada
+// Esta función (pwaConfig) es el resultado de llamar a withPWA con tus opciones.
+const pwaConfig = withPWA({
+  dest: 'public',
+  register: true,
+  skipWaiting: true,
+  
+  // FIX 1: Usamos la opción 'disable' del plugin next-pwa, lo cual 
+  // es la forma correcta de manejar PWA solo en producción.
+  disable: process.env.NODE_ENV === 'development',
 });
-
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// 2. Quitamos la función 'withPWA' custom que creaste, 
-// y usamos directamente la de next-pwa.
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Configuración de Next.js
   typescript: {
     ignoreBuildErrors: true,
   },
   images: {
     unoptimized: true,
   },
-}
+  
+  // FIX 2: Añadimos 'turbopack: {}' para evitar el conflicto entre
+  // Turbopack (nuevo constructor de Next.js) y Webpack (usado por el plugin PWA).
+  turbopack: {}, 
+};
 
-// 3. Aplicamos el HOC de PWA a la configuración de Next
-// ¡Aquí es donde envolvemos nextConfig con la función withPWA importada!
-export default withPWA(nextConfig);
-
-// NOTA: Si 'next-pwa' no usa 'export default', 
-// puedes intentar: import NextPWA from 'next-pwa/lib/with-pwa.js' 
-// o buscar la documentación oficial de next-pwa para cómo importarlo en ESM.
-// Pero la estructura de arriba es la más común para "wrappers" de Next.js.
+// Exportamos la configuración base envuelta en la configuración de PWA
+export default pwaConfig(nextConfig);
