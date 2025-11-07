@@ -94,7 +94,7 @@ export default function LoginForm() {
           {/* ENCABEZADO PERSONALIZADO: LOGO y Siskooven */}
           <div className="flex items-center gap-2 mb-4">
             <img src="/logo.png" alt="Siskoven Logo" className="w-10 h-10 object-contain" />
-            <span className="text-2xl font-bold text-primary">Siskoven</span>
+            <span className="text-2xl font-bold text-primary">Siskoven System</span>
           </div>
           <CardTitle>{isLogin ? "Iniciar Sesión" : "Crear Cuenta (Acceso Exclusivo)"}</CardTitle>
           <CardDescription>
