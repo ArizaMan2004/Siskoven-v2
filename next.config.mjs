@@ -1,27 +1,25 @@
 import { fileURLToPath } from 'url';
 import path from 'path';
+// 1. IMPORTAR next-pwa aquí, de forma asíncrona si es necesario, 
+// o simplemente el import estático si next-pwa lo permite
+import NextPWA from 'next-pwa'; // <-- ASUME que next-pwa usa export default
 
-// 🔥 IMPORTANTE: Importamos next-pwa de forma asíncrona porque estamos en .mjs
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const withPWA = (config) => {
-  // Solo se carga en modo de producción, ¡pero debe ser instalado!
-  // Asegúrate de haber ejecutado 'npm install next-pwa'
-  if (process.env.NODE_ENV === 'development') {
-    return config;
-  }
-  
-  // Cargamos next-pwa y lo inicializamos
-  const nextPWA = require('next-pwa')({
+// Necesitas una forma de obtener el 'withPWA' que es la función.
+// Como next-pwa exporta una función, la forma más limpia es esta:
+const withPWA = NextPWA({
     dest: 'public',
     register: true,
     skipWaiting: true,
-    // La opción 'disable' ya no es necesaria aquí si lo manejamos en el 'if'
-  });
+    // Puedes dejar 'disable: process.env.NODE_ENV === 'development'' si lo quieres
+    disable: process.env.NODE_ENV === 'development',
+});
 
-  return nextPWA(config);
-};
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// 2. Quitamos la función 'withPWA' custom que creaste, 
+// y usamos directamente la de next-pwa.
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -33,5 +31,11 @@ const nextConfig = {
   },
 }
 
-// Aplicamos el HOC de PWA a la configuración de Next
+// 3. Aplicamos el HOC de PWA a la configuración de Next
+// ¡Aquí es donde envolvemos nextConfig con la función withPWA importada!
 export default withPWA(nextConfig);
+
+// NOTA: Si 'next-pwa' no usa 'export default', 
+// puedes intentar: import NextPWA from 'next-pwa/lib/with-pwa.js' 
+// o buscar la documentación oficial de next-pwa para cómo importarlo en ESM.
+// Pero la estructura de arriba es la más común para "wrappers" de Next.js.
