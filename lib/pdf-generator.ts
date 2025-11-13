@@ -186,7 +186,8 @@ export function generateInvoice(
   doc.setFontSize(14)
   doc.setTextColor(79, 53, 248) 
   doc.text("TOTAL BS:", labelX, finalY + 8)
-  doc.text(`Bs ${totalBs.toFixed(2)}`, valueX, finalY + 8, { align: "right" })
+  doc.setFontSize(20)
+  doc.text(`${totalBs.toFixed(2)} Bs.`, valueX, finalY + 16, { align: "right" })
   doc.setTextColor(0) // Reset color
 
   doc.setFontSize(8)
