@@ -18,5 +18,6 @@ export default function Home() {
     )
   }
 
+  // ✅ Ya no necesitamos RecaptchaProviderWrapper aquí.
   return user ? <Dashboard /> : <LoginForm />
 }

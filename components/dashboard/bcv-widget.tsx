@@ -4,7 +4,9 @@ import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { fetchBCVRateFromAPI, getBCVRate, setBCVRate } from "@/lib/bcv-service";
+// Asumo que getBCVRate y setBCVRate ya no son necesarios si todo se maneja desde la API
+// Si aún necesitas guardar en local, podemos reintroducirlos.
+import { fetchBCVRateFromAPI } from "@/lib/bcv-service"; 
 import { RefreshCw } from "lucide-react"
 
 interface BCVWidgetProps {
@@ -13,43 +15,67 @@ interface BCVWidgetProps {
 
 export default function BCVWidget({ onRateChange }: BCVWidgetProps) {
   const [rate, setRate] = useState(216.37)
-  const [lastUpdated, setLastUpdated] = useState<Date>(new Date())
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null) // Lo cambié a Date | null
   const [isUpdating, setIsUpdating] = useState(false)
+  
+  // Función central para actualizar la tasa desde la API
+  const refreshRateFromAPI = async () => {
+    setIsUpdating(true);
+    try {
+      // 1. Llama a la API
+      const data = await fetchBCVRateFromAPI();
+      
+      // 2. Actualiza los estados
+      setRate(data.rate);
+      setLastUpdated(data.lastUpdated); // Usa la fecha de la API si está disponible
+      
+      // 3. Notifica a los padres
+      onRateChange?.(data.rate);
 
+      // Aquí podrías reintroducir setBCVRate(data.rate, "api") si necesitas guardar en el almacenamiento local
+      
+    } catch (error) {
+      console.error("Error refreshing rate:", error);
+      // Aquí podrías añadir un estado para mostrar el error al usuario
+    } finally {
+      setIsUpdating(false);
+    }
+  }
+
+  // Hook para la actualización automática y al montar el componente
   useEffect(() => {
-    const bcvData = getBCVRate()
-    setRate(bcvData.rate)
-    setLastUpdated(bcvData.lastUpdated)
-  }, [])
+    const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
+
+    // 1. Actualiza inmediatamente al montar
+    refreshRateFromAPI();
+
+    // 2. Configura el intervalo para la actualización periódica
+    const intervalId = setInterval(refreshRateFromAPI, REFRESH_INTERVAL_MS);
+
+    // 3. Función de limpieza: Detiene el intervalo al desmontar el componente
+    return () => clearInterval(intervalId);
+  }, [onRateChange])
+
 
   const handleUpdateRate = () => {
-    setBCVRate(rate, "manual")
+    // Si la actualización es manual, solo guarda el nuevo valor
+    // y actualiza la hora localmente (sin llamar a la API).
+    // setBCVRate(rate, "manual") // Descomentar si usas almacenamiento local
     setLastUpdated(new Date())
     onRateChange?.(rate)
   }
 
-const handleRefreshFromAPI = async () => {
-  setIsUpdating(true);
-  try {
-    const data = await fetchBCVRateFromAPI();
-    setRate(data.rate);
-    setBCVRate(data.rate, "api");
-    setLastUpdated(data.lastUpdated);
-    onRateChange?.(data.rate);
-  } catch (error) {
-    console.error("Error refreshing rate:", error);
-  } finally {
-    setIsUpdating(false);
-  }
-}
+  // Ahora, handleRefreshFromAPI solo necesita llamar a la función reutilizada
+  const handleRefreshFromAPI = refreshRateFromAPI;
 
-  const formatDate = (dateValue: Date | string) => {
+
+  const formatDate = (dateValue: Date | string | null) => {
   if (!dateValue) return "Sin fecha";
 
   let date: Date;
   try {
-    // Si viene como string (por ejemplo "2025-10-28"), conviértelo a Date
-    date = typeof dateValue === "string" ? new Date(dateValue + "T00:00:00") : dateValue;
+    // Asegura que el valor sea un objeto Date
+    date = typeof dateValue === "string" ? new Date(dateValue) : dateValue;
 
     if (isNaN(date.getTime())) return "Fecha inválida";
 
@@ -89,8 +115,9 @@ const handleRefreshFromAPI = async () => {
               step="0.01"
               placeholder="Ingresa la tasa"
               className="flex-1"
+              disabled={isUpdating}
             />
-            <Button onClick={handleUpdateRate} className="bg-primary hover:bg-primary/90">
+            <Button onClick={handleUpdateRate} className="bg-primary hover:bg-primary/90" disabled={isUpdating}>
               Guardar
             </Button>
           </div>
@@ -105,6 +132,9 @@ const handleRefreshFromAPI = async () => {
             {isUpdating ? "Actualizando..." : "Actualizar Tasa BCV"}
           </Button>
         </div>
+        <p className="text-xs text-center text-muted-foreground">
+          Actualización automática cada 5 minutos.
+        </p>
       </CardContent>
     </Card>
   )

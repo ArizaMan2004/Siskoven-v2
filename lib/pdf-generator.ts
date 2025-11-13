@@ -23,27 +23,38 @@ interface SaleItem {
   priceBs: number
 }
 
-// Lógica unificada para calcular el precio de venta unitario/por Kg/por m²
+// ===============================================
+// 🎯 Lógica unificada para calcular el precio de venta (MARGEN BRUTO)
+// ===============================================
 function calculateSalePrice(product: Product): number {
   let profitDecimal = product.profit > 1 ? product.profit / 100 : product.profit
-  if (isNaN(profitDecimal) || profitDecimal < 0) profitDecimal = 0
+  
+  // Manejo de errores/valores no deseados: El margen debe ser menor a 100% (1.0)
+  if (isNaN(profitDecimal) || profitDecimal < 0 || profitDecimal >= 1) {
+    profitDecimal = 0; 
+  }
 
+  // 💡 Divisor de la fórmula de Margen Bruto: 1 - Margen en decimal
+  const divisor = 1 - profitDecimal;
+  
   switch (product.saleType) {
     case "unit":
     case "weight": {
-      // Precio de venta = Costo Unitario (costUsd) * (1 + Ganancia %)
-      const salePrice = product.costUsd * (1 + profitDecimal)
+      // Precio de Venta = Costo / (1 - Margen en decimal)
+      const salePrice = product.costUsd / divisor;
       return Number.isFinite(salePrice) ? salePrice : 0
     }
     case "area": {
-      // Precio de venta m² = Precio Base (PRECIO_M2) * (1 + Ganancia %)
-      const salePrice = PRECIO_M2 * (1 + profitDecimal)
+      // Precio de Venta m² = Costo Base / (1 - Margen en decimal)
+      const salePrice = PRECIO_M2 / divisor;
       return Number.isFinite(salePrice) ? salePrice : 0
     }
     default:
       return 0
   }
 }
+// ===============================================
+
 
 /**
  * Genera un reporte de inventario en PDF (Diseño Profesional)
@@ -205,8 +216,20 @@ export function generateProductLabels(products: Product[], bcvRate: number) {
 
     // Nombre del producto
     doc.setFont("helvetica", "bold")
-    doc.setFontSize(14) 
-    doc.text(p.name.toUpperCase(), x + labelWidth / 2, y + 10, { align: "center" })
+    let fontSize = 14 // Tamaño inicial
+    const maxTextWidth = labelWidth - 4; // 56 mm de espacio seguro (de 60mm total)
+    let text = p.name.toUpperCase();
+    
+    // ⭐️ LÓGICA DE AJUSTE DE FUENTE
+    // Decrementa la fuente hasta que el texto quepa (mínimo 8pt)
+    while (doc.getTextWidth(text) > maxTextWidth && fontSize > 8) {
+      fontSize -= 0.5;
+      doc.setFontSize(fontSize);
+    }
+    // ⭐️ FIN LÓGICA DE AJUSTE DE FUENTE
+
+    doc.setFontSize(fontSize)
+    doc.text(text, x + labelWidth / 2, y + 10, { align: "center" })
 
     // Precio USD (Elemento dominante)
     doc.setFontSize(28)

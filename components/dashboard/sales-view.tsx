@@ -20,7 +20,7 @@ interface Product {
   costUsd: number
   quantity: number
   profit: number
-  saleType: "unit" | "weight" | "area"
+  saleType: "unit" | "weight" // 🚨 ACTUALIZADO: Eliminado "area"
   barcode?: string
 }
 
@@ -30,13 +30,13 @@ interface CartItem {
   quantity: number
   priceUsd: number
   priceBs: number
-  saleType: "unit" | "weight" | "area"
-  widthCm?: number
-  heightCm?: number
-  kg?: number
+  saleType: "unit" | "weight" // 🚨 ACTUALIZADO: Eliminado "area"
+  // 🚨 ELIMINADO: widthCm?: number
+  // 🚨 ELIMINADO: heightCm?: number
+  kg?: number // Usado para cantidad de peso (kg)
 }
 
-const PRECIO_M2 = 15
+// 🚨 ELIMINADA: const PRECIO_M2 se ha eliminado.
 
 export default function SalesView() {
   const { user } = useAuth()
@@ -109,74 +109,65 @@ export default function SalesView() {
     else alert(`Producto con código ${code} no encontrado`)
   }
 
-  // 🔥 FUNCIÓN CORREGIDA: Lógica estandarizada con products-view.tsx
+  // ⭐️ FUNCIÓN CORREGIDA: Usa la fórmula de Margen Bruto (unificada)
   const calculateSalePrice = (product: Product) => {
     let profitDecimal = product.profit > 1 ? product.profit / 100 : product.profit
-    if (isNaN(profitDecimal) || profitDecimal < 0) profitDecimal = 0
-
-    switch (product.saleType) {
-      case "unit":
-      case "weight": {
-        // Precio de venta = Costo Unitario (costUsd) * (1 + Ganancia %)
-        const salePrice = product.costUsd * (1 + profitDecimal)
-        return salePrice
-      }
-      case "area": {
-        // Precio de venta m² = Precio Base (PRECIO_M2) * (1 + Ganancia %)
-        const salePrice = PRECIO_M2 * (1 + profitDecimal)
-        return salePrice
-      }
-      default:
-        return 0
+    
+    // Si el margen es inválido o 100% (causando división por cero), lo ponemos en 0.
+    if (isNaN(profitDecimal) || profitDecimal < 0 || profitDecimal >= 1) {
+        profitDecimal = 0;
     }
+
+    // 💡 Margen Bruto: PV = Costo / (1 - Margen)
+    const divisor = 1 - profitDecimal;
+    
+    // El cálculo es el mismo para unit/weight ya que costUsd es el costo por la unidad base.
+    const salePrice = product.costUsd / divisor;
+    
+    return Number.isFinite(salePrice) ? salePrice : 0;
   }
 
   const openAddDialog = (product: Product) => {
     let quantity = 1
-    let widthCm = undefined as number | undefined
-    let heightCm = undefined as number | undefined
     let kg = undefined as number | undefined
+    let quantityType = "unidad"
 
     if (product.saleType === "weight") {
-      const rawKg = prompt(`Ingresa cantidad de kg de ${product.name}:`, "1")
-      if (!rawKg) return
-      kg = Number.parseFloat(rawKg)
+      quantityType = "kg"
+      const rawQuantity = prompt(`Ingresa cantidad de kg de ${product.name}:`, "1")
+      if (!rawQuantity) return
+      kg = Number.parseFloat(rawQuantity) 
       if (isNaN(kg) || kg <= 0) return alert("Kg inválidos")
       quantity = kg
-    } else if (product.saleType === "area") {
-      const rawW = prompt(`Ingresa ancho en cm de ${product.name}:`, "100")
-      const rawH = prompt(`Ingresa alto en cm de ${product.name}:`, "100")
-      if (!rawW || !rawH) return
-      widthCm = Number.parseFloat(rawW)
-      heightCm = Number.parseFloat(rawH)
-      if (isNaN(widthCm) || isNaN(heightCm) || widthCm <= 0 || heightCm <= 0) return alert("Dimensiones inválidas")
-      quantity = (widthCm / 100) * (heightCm / 100)
     }
-
-    addToCart(product, quantity, widthCm, heightCm, kg)
+    
+    // 🚨 SIMPLIFICADO: Eliminados widthCm/heightCm
+    addToCart(product, quantity, undefined, undefined, kg) 
   }
 
+  // 🚨 SIMPLIFICADO: Eliminados widthCm/heightCm de la definición de función
   const addToCart = (product: Product, quantity: number, widthCm?: number, heightCm?: number, kg?: number) => {
-    const salePriceUnit = calculateSalePrice(product) // Precio por unidad, kg, o m²
+    const salePriceUnit = calculateSalePrice(product) // Precio por unidad, kg
     const totalPriceUsd = salePriceUnit * quantity
 
-    if (product.saleType !== "area" && quantity > product.quantity) {
+    // Inventario: Ambos tipos afectan el inventario
+    if (quantity > product.quantity) { 
       alert("No hay suficiente inventario")
       return
     }
 
+    // Key matching: Simplificado para tipos con cantidad (weight)
     const keyMatches = (i: CartItem) =>
       i.productId === product.id &&
       i.saleType === product.saleType &&
-      (product.saleType !== "area" || (i.widthCm === widthCm && i.heightCm === heightCm)) &&
-      (product.saleType !== "weight" || i.kg === kg)
+      // Coincide el valor 'kg' solo si el tipo es 'weight'
+      (i.saleType === "weight" ? i.kg === kg : true)
 
     const existingItem = cart.find(keyMatches)
 
     if (existingItem) {
       // Si el ítem ya existe, se suma la cantidad
       existingItem.quantity = Number(existingItem.quantity) + Number(quantity)
-      // Se recalcula el precio Bs (Precio Unitario * Nueva Cantidad * Tasa BCV)
       existingItem.priceBs = salePriceUnit * existingItem.quantity * bcvRate
       setCart([...cart])
     } else {
@@ -184,14 +175,11 @@ export default function SalesView() {
         productId: product.id,
         name: product.name,
         quantity,
-        priceUsd: salePriceUnit, // Almacenar el precio unitario (o por kg/m²)
-        priceBs: totalPriceUsd * bcvRate, // Almacenar el total en Bs de la línea
+        priceUsd: salePriceUnit,
+        priceBs: totalPriceUsd * bcvRate,
         saleType: product.saleType,
       }
-      if (product.saleType === "area") {
-        item.widthCm = widthCm
-        item.heightCm = heightCm
-      }
+      // Se establece kg solo para peso
       if (product.saleType === "weight") {
         item.kg = kg
       }
@@ -205,12 +193,14 @@ export default function SalesView() {
 
   const updateQuantity = (item: CartItem, newQuantity: number) => {
     if (newQuantity <= 0) {
-      removeFromCart(item.productId)
+      // 🚨 CORREGIDO: Usar el ID del ítem, no el de producto si queremos eliminar
+      setCart(cart.filter((i) => i.productId !== item.productId || (item.saleType === "weight" && i.kg === item.kg)))
       return
     }
     const product = products.find((p) => p.id === item.productId)
     if (!product) return
-    if (product.saleType !== "area" && newQuantity > product.quantity) {
+    // Inventario: Ambos tipos afectan el inventario
+    if (newQuantity > product.quantity) {
       alert("Cantidad no disponible")
       return
     }
@@ -275,7 +265,8 @@ export default function SalesView() {
 
       for (const item of cart) {
         const product = products.find((p) => p.id === item.productId)
-        if (product && product.saleType !== "area") {
+        // 🚨 SIMPLIFICADO: Ambos tipos actualizan el stock
+        if (product) {
           await updateDoc(doc(db, "productos", product.id), {
             quantity: product.quantity - item.quantity,
           })
@@ -437,7 +428,7 @@ export default function SalesView() {
                   <div className="space-y-3 overflow-y-auto flex-1 pr-2">
                     {cart.map((item) => (
                       <div
-                        key={`${item.productId}-${item.saleType}-${item.widthCm || 0}-${item.heightCm || 0}`}
+                        key={`${item.productId}-${item.saleType}-${item.kg || 0}`}
                         className="border border-border rounded-lg p-3"
                       >
                         <div className="flex justify-between items-start mb-2">
@@ -473,7 +464,6 @@ export default function SalesView() {
 
                         <div className="text-sm text-muted-foreground">
                           Bs {item.priceBs.toFixed(2)}
-                          {item.saleType === "area" && ` — ${item.widthCm}cm x ${item.heightCm}cm`}
                           {item.saleType === "weight" && ` — ${item.kg} kg`}
                         </div>
                       </div>

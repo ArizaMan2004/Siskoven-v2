@@ -11,35 +11,55 @@ import { Plus, Edit2, Trash2, X, Search } from "lucide-react"
 import { getBCVRate } from "@/lib/bcv-service"
 import { getCategories, addCategory } from "@/lib/categories-service"
 import BCVWidget from "./bcv-widget"
-// ⭐️ NUEVO: Importación para animaciones
 import { motion } from "framer-motion" 
 
 // 🧩 Interfaces y tipos
 interface Product {
-// ... (cuerpo de Product) ...
   id: string
   name: string
   category: string
   costUsd: number
   quantity: number
   profit: number
-  saleType: "unit" | "weight" | "area"
+  saleType: "unit" | "weight" // 🚨 ACTUALIZADO: Eliminado "area"
   barcode?: string
 }
 
 // Interfaz simplificada
 interface FormData {
-// ... (cuerpo de FormData) ...
   name: string
   category: string
   costUsd: string
   quantity: string
   profit: string
-  saleType: "unit" | "weight" | "area"
+  saleType: "unit" | "weight" // 🚨 ACTUALIZADO: Eliminado "area"
   barcode: string
 }
 
-const PRECIO_M2 = 15
+// 🚨 ELIMINADA: La constante PRECIO_M2
+
+// ===============================================
+// 🎯 FUNCIÓN DE CÁLCULO (Margen Bruto)
+// ===============================================
+
+const calculateSalePrice = (product: Product): number => {
+    // 1. Normalización del Porcentaje a decimal (ej: 20 -> 0.2)
+    let profitDecimal = product.profit > 1 ? product.profit / 100 : product.profit;
+
+    // 2. Manejo de errores/valores no deseados
+    if (isNaN(profitDecimal) || profitDecimal < 0 || profitDecimal >= 1) {
+        profitDecimal = 0; 
+    }
+
+    // 3. CÁLCULO DEL PRECIO DE VENTA (Fórmula del Margen Bruto):
+    // Precio de Venta = Costo / (1 - Margen en decimal)
+    const salePrice = product.costUsd / (1 - profitDecimal);
+
+    // 4. Devolvemos el precio válido o 0 si el resultado es infinito/inválido.
+    return Number.isFinite(salePrice) ? salePrice : 0;
+}
+
+// ===============================================
 
 export default function ProductsView() {
   const { user } = useAuth()
@@ -71,7 +91,6 @@ export default function ProductsView() {
     fetchBCV()
   }, [user])
 
-// ... (funciones loadCategories, loadProducts, etc.) ...
   const fetchBCV = async () => {
     try {
       const bcvData = await getBCVRate()
@@ -126,8 +145,6 @@ export default function ProductsView() {
     if (!user) return
 
     try {
-      // Se eliminó la lógica de cálculo por lote.
-      // Se toma el Costo USD como costo unitario y Quantity como cantidad total.
       const costUsd = Number.parseFloat(formData.costUsd)
       const quantity = Number.parseInt(formData.quantity)
 
@@ -201,13 +218,6 @@ export default function ProductsView() {
     const matchesCategory = !selectedCategory || p.category === selectedCategory
     return matchesSearch && matchesCategory
   })
-
-  const calculateSalePrice = (product: Product): number => {
-    let profitDecimal = product.profit > 1 ? product.profit / 100 : product.profit
-    if (isNaN(profitDecimal) || profitDecimal < 0) profitDecimal = 0
-    const salePrice = product.costUsd * (1 + profitDecimal)
-    return Number.isFinite(salePrice) ? salePrice : 0
-  }
 
   // 🧱 Render
   return (
@@ -317,10 +327,17 @@ export default function ProductsView() {
 
                 <Input
                   type="number"
-                  placeholder="Ganancia %"
+                  placeholder="Margen % (sobre la venta)"
                   step="0.01"
                   value={formData.profit}
-                  onChange={(e) => setFormData({ ...formData, profit: e.target.value })}
+                  max="99" 
+                  onChange={(e) => {
+                    let value = e.target.value
+                    if (Number(value) > 99) {
+                        value = "99"
+                    }
+                    setFormData({ ...formData, profit: value })
+                  }}
                   required
                   className="h-10"
                 />
@@ -332,7 +349,7 @@ export default function ProductsView() {
                 >
                   <option value="unit">Por Unidad</option>
                   <option value="weight">Por Peso (Kg)</option>
-                  <option value="area">Por Área (m²)</option>
+                  {/* 🚨 ELIMINADO: Por Área (m²) */}
                 </select>
               </div>
 
