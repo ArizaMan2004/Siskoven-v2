@@ -1,7 +1,6 @@
 "use client"
 
 import { useState, useEffect } from "react"
-// ⭐️ NUEVO: Importación para animaciones
 import { motion } from "framer-motion" 
 import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/firebase"
@@ -20,7 +19,7 @@ interface Product {
   costUsd: number
   quantity: number
   profit: number
-  saleType: "unit" | "weight" // 🚨 ACTUALIZADO: Eliminado "area"
+  saleType: "unit" | "weight" 
   barcode?: string
 }
 
@@ -30,13 +29,11 @@ interface CartItem {
   quantity: number
   priceUsd: number
   priceBs: number
-  saleType: "unit" | "weight" // 🚨 ACTUALIZADO: Eliminado "area"
-  // 🚨 ELIMINADO: widthCm?: number
-  // 🚨 ELIMINADO: heightCm?: number
-  kg?: number // Usado para cantidad de peso (kg)
+  saleType: "unit" | "weight" 
+  kg?: number 
 }
 
-// 🚨 ELIMINADA: const PRECIO_M2 se ha eliminado.
+type PaymentMethod = "debit" | "cash" | "transfer" | "mixed" | "pagoMovil" | "zelle" | "binance"
 
 export default function SalesView() {
   const { user } = useAuth()
@@ -49,8 +46,7 @@ export default function SalesView() {
   const [showCart, setShowCart] = useState(false)
   const [searchTerm, setSearchTerm] = useState("")
 
-  // Métodos de pago
-  const [paymentMethod, setPaymentMethod] = useState<"debit" | "cash" | "transfer" | "mixed">("cash")
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash")
   const [mixedUsd, setMixedUsd] = useState<string>("")
   const [mixedBs, setMixedBs] = useState<string>("")
 
@@ -60,6 +56,27 @@ export default function SalesView() {
     const bcvData = getBCVRate()
     setBcvRate(bcvData.rate)
   }, [user])
+  
+  // ----------------------------------------------------
+  // 💡 BLOQUE DE CÁLCULO DE TOTALES (POSICIÓN CORREGIDA)
+  // ----------------------------------------------------
+  // Totales base (antes de descuento)
+  const baseTotalBs = cart.reduce((sum, i) => sum + i.priceBs, 0)
+  const baseTotalUsd = baseTotalBs / bcvRate
+
+  // Lógica de descuento
+  const methodsWithDiscount = ["cash", "zelle", "binance"]
+  const discount = methodsWithDiscount.includes(paymentMethod) ? 0.3 : 0
+  
+  // 🚨 DEFINICIÓN DE TOTALUSD Y TOTALBS (Ahora se definen antes de usarse)
+  const totalUsd = baseTotalUsd * (1 - discount)
+  const totalBs = totalUsd * bcvRate
+  
+  // Texto de descuento
+  const discountText = discount > 0 
+    ? `Descuento (30% ${paymentMethod === 'cash' ? 'Efectivo USD' : paymentMethod.toUpperCase()}):` 
+    : 'Descuento:'
+  // ----------------------------------------------------
 
   useEffect(() => {
     if (!scannerActive) return
@@ -71,7 +88,8 @@ export default function SalesView() {
   useEffect(() => {
     if (paymentMethod !== "mixed") return
 
-    const totalEnBs = totalUsd * bcvRate
+    // Ahora totalUsd y totalBs existen aquí
+    const totalEnBs = totalUsd * bcvRate 
 
     // Si el usuario escribe en USD, calculamos el resto en Bs
     if (mixedUsd && !isNaN(Number.parseFloat(mixedUsd)) && document.activeElement?.id === "usd-input") {
@@ -86,7 +104,8 @@ export default function SalesView() {
       const restanteUsd = Math.max((totalEnBs - bs) / bcvRate, 0)
       setMixedUsd(restanteUsd.toFixed(2))
     }
-  }, [mixedUsd, mixedBs, paymentMethod, bcvRate])
+  // 🚨 totalUsd está en las dependencias, lo cual está bien.
+  }, [mixedUsd, mixedBs, paymentMethod, bcvRate, totalUsd]) 
 
   const loadProducts = async () => {
     if (!user) return
@@ -141,11 +160,9 @@ export default function SalesView() {
       quantity = kg
     }
     
-    // 🚨 SIMPLIFICADO: Eliminados widthCm/heightCm
     addToCart(product, quantity, undefined, undefined, kg) 
   }
 
-  // 🚨 SIMPLIFICADO: Eliminados widthCm/heightCm de la definición de función
   const addToCart = (product: Product, quantity: number, widthCm?: number, heightCm?: number, kg?: number) => {
     const salePriceUnit = calculateSalePrice(product) // Precio por unidad, kg
     const totalPriceUsd = salePriceUnit * quantity
@@ -193,7 +210,7 @@ export default function SalesView() {
 
   const updateQuantity = (item: CartItem, newQuantity: number) => {
     if (newQuantity <= 0) {
-      // 🚨 CORREGIDO: Usar el ID del ítem, no el de producto si queremos eliminar
+      // Usar el ID del ítem, no el de producto si queremos eliminar
       setCart(cart.filter((i) => i.productId !== item.productId || (item.saleType === "weight" && i.kg === item.kg)))
       return
     }
@@ -210,16 +227,6 @@ export default function SalesView() {
     item.priceBs = item.priceUsd * newQuantity * bcvRate
     setCart([...cart])
   }
-
-  // Totales base (antes de descuento)
-  // El precio Bs en el carrito (item.priceBs) ya es el TOTAL de la línea
-  const baseTotalBs = cart.reduce((sum, i) => sum + i.priceBs, 0)
-  const baseTotalUsd = baseTotalBs / bcvRate
-
-  // Descuento si el pago es en efectivo (USD)
-  const discount = paymentMethod === "cash" ? 0.3 : 0
-  const totalUsd = baseTotalUsd * (1 - discount)
-  const totalBs = totalUsd * bcvRate
 
   const handleCheckout = async () => {
     if (!user) return alert("Usuario no autenticado")
@@ -265,7 +272,7 @@ export default function SalesView() {
 
       for (const item of cart) {
         const product = products.find((p) => p.id === item.productId)
-        // 🚨 SIMPLIFICADO: Ambos tipos actualizan el stock
+        // Ambos tipos actualizan el stock
         if (product) {
           await updateDoc(doc(db, "productos", product.id), {
             quantity: product.quantity - item.quantity,
@@ -474,7 +481,7 @@ export default function SalesView() {
                 <div className="border-t border-border pt-4 space-y-3 flex-shrink-0">
                   {discount > 0 && (
                     <div className="flex justify-between text-green-600 text-sm">
-                      <span>Descuento (30% efectivo USD):</span>
+                      <span>{discountText}</span>
                       <span>- ${(baseTotalUsd * 0.3).toFixed(2)}</span>
                     </div>
                   )}
@@ -492,12 +499,15 @@ export default function SalesView() {
                     <label className="text-sm font-medium">Método de Pago</label>
                     <select
                       value={paymentMethod}
-                      onChange={(e) => setPaymentMethod(e.target.value as any)}
+                      onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
                       className="w-full px-3 py-2 border border-input rounded-md bg-background mt-2 text-sm"
                     >
+                      <option value="cash">Efectivo (USD) - 30% Dcto.</option>
+                      <option value="zelle">Zelle - 30% Dcto.</option>
+                      <option value="binance">Binance - 30% Dcto.</option>
                       <option value="debit">Débito</option>
-                      <option value="cash">Efectivo (USD)</option>
-                      <option value="transfer">Transferencia</option>
+                      <option value="transfer">Transferencia Bancaria</option>
+                      <option value="pagoMovil">Pago Móvil</option>
                       <option value="mixed">Mixto</option>
                     </select>
                   </div>

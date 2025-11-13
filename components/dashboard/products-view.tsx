@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useEffect, type FormEvent } from "react"
+// 🚨 CORRECCIÓN: Se agrega 'useCallback'
+import { useState, useEffect, type FormEvent, useCallback } from "react"
 import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/firebase"
 import { collection, query, where, getDocs, addDoc, updateDoc, deleteDoc, doc, Timestamp } from "firebase/firestore"
@@ -21,7 +22,7 @@ interface Product {
   costUsd: number
   quantity: number
   profit: number
-  saleType: "unit" | "weight" // 🚨 ACTUALIZADO: Eliminado "area"
+  saleType: "unit" | "weight"
   barcode?: string
 }
 
@@ -32,11 +33,9 @@ interface FormData {
   costUsd: string
   quantity: string
   profit: string
-  saleType: "unit" | "weight" // 🚨 ACTUALIZADO: Eliminado "area"
+  saleType: "unit" | "weight"
   barcode: string
 }
-
-// 🚨 ELIMINADA: La constante PRECIO_M2
 
 // ===============================================
 // 🎯 FUNCIÓN DE CÁLCULO (Margen Bruto)
@@ -99,6 +98,11 @@ export default function ProductsView() {
       console.error("Error loading BCV rate:", error)
     }
   }
+  
+  // Memoizar la función onRateChange con useCallback
+  const handleBcvRateChange = useCallback((newRate: number) => {
+    setBcvRate(newRate);
+  }, []); 
 
   const loadCategories = async () => {
     if (!user) return
@@ -138,6 +142,24 @@ export default function ProductsView() {
       console.error("Error adding category:", error)
     }
   }
+
+  // ----------------------------------------------------
+  // LÓGICA: CÁLCULO DE PRECIOS PARA LA VISTA PREVIA DEL FORMULARIO
+  // ----------------------------------------------------
+  const currentCostUsd = Number.parseFloat(formData.costUsd || "0");
+  const currentProfit = Number.parseFloat(formData.profit || "0");
+
+  let profitDecimal = currentProfit > 1 ? currentProfit / 100 : currentProfit;
+  if (isNaN(profitDecimal) || profitDecimal < 0 || profitDecimal >= 1) {
+      profitDecimal = 0; 
+  }
+
+  // Fórmula del Margen Bruto: PV = Costo / (1 - Margen en decimal)
+  const previewSalePriceUsd = currentCostUsd / (1 - profitDecimal);
+  const finalSalePriceUsd = Number.isFinite(previewSalePriceUsd) ? previewSalePriceUsd : 0;
+  const finalSalePriceBs = finalSalePriceUsd * bcvRate;
+  // ----------------------------------------------------
+
 
   // 💾 Guardar producto
   const handleAddProduct = async (e: FormEvent<HTMLFormElement>) => {
@@ -221,7 +243,7 @@ export default function ProductsView() {
 
   // 🧱 Render
   return (
-    // ⭐️ AJUSTE DE ANIMACIÓN: motion.div envuelve todo el contenido
+    // AJUSTE DE ANIMACIÓN: motion.div envuelve todo el contenido
     <motion.div
       initial={{ opacity: 0, y: 20 }} // Comienza invisible y 20px abajo
       animate={{ opacity: 1, y: 0 }}  // Termina visible y en su posición (subiendo)
@@ -247,7 +269,7 @@ export default function ProductsView() {
         </Button>
       </div>
 
-      <BCVWidget onRateChange={(newRate) => setBcvRate(newRate)} />
+      <BCVWidget onRateChange={handleBcvRateChange} />
 
       {/* Formulario */}
       {showForm && (
@@ -349,17 +371,42 @@ export default function ProductsView() {
                 >
                   <option value="unit">Por Unidad</option>
                   <option value="weight">Por Peso (Kg)</option>
-                  {/* 🚨 ELIMINADO: Por Área (m²) */}
+                  {/* ELIMINADO: Por Área (m²) */}
                 </select>
               </div>
+
+              {/* ⭐️ SECCIÓN CORREGIDA: VISTA PREVIA DEL PRECIO FINAL (Apto para Dark Mode) */}
+              {currentCostUsd > 0 && (
+                <div className="
+                  bg-blue-50/70 dark:bg-blue-900/30 
+                  p-4 rounded-lg 
+                  border border-blue-200 dark:border-blue-700 
+                  space-y-2
+                ">
+                  <h4 className="font-semibold text-blue-800 dark:text-blue-300">Precios Calculados (Vista Previa)</h4>
+                  <div className="flex justify-between">
+                      <span className="text-sm text-foreground/70">Precio Venta USD:</span>
+                      <span className="font-bold text-base text-blue-800 dark:text-blue-300">${finalSalePriceUsd.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                      <span className="text-sm text-foreground/70">
+                        Precio Venta Bs (Tasa: {bcvRate.toFixed(2)}):
+                      </span>
+                      <span className="font-bold text-base text-green-600 dark:text-green-400">Bs {finalSalePriceBs.toFixed(2)}</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground pt-1 border-t mt-2">
+                      Costo: ${currentCostUsd.toFixed(2)} / Margen: {currentProfit.toFixed(2)}%
+                  </p>
+                </div>
+              )}
+              {/* FIN DE LA SECCIÓN CORREGIDA */}
 
               <div className="flex flex-col sm:flex-row gap-2">
                 <Button type="submit" className="bg-primary hover:bg-primary/90 h-10">
                   {editingId ? "Actualizar" : "Guardar"}
                 </Button>
                 <Button type="button" onClick={resetForm} variant="outline" className="h-10 bg-transparent">
-                  Cancelar
-                </Button>
+                  Cancelar</Button>
               </div>
             </form>
           </CardContent>

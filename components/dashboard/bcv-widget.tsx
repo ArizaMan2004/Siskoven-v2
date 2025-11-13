@@ -1,11 +1,10 @@
 "use client"
 
-import { useState, useEffect } from "react"
+// 🚨 CORRECCIÓN: Se agrega 'useCallback'
+import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-// Asumo que getBCVRate y setBCVRate ya no son necesarios si todo se maneja desde la API
-// Si aún necesitas guardar en local, podemos reintroducirlos.
 import { fetchBCVRateFromAPI } from "@/lib/bcv-service"; 
 import { RefreshCw } from "lucide-react"
 
@@ -15,11 +14,12 @@ interface BCVWidgetProps {
 
 export default function BCVWidget({ onRateChange }: BCVWidgetProps) {
   const [rate, setRate] = useState(216.37)
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null) // Lo cambié a Date | null
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [isUpdating, setIsUpdating] = useState(false)
   
-  // Función central para actualizar la tasa desde la API
-  const refreshRateFromAPI = async () => {
+  // 🚨 CORRECCIÓN CLAVE 1: Envolver refreshRateFromAPI en useCallback
+  // Esto asegura que la referencia a la función no cambie a menos que 'onRateChange' cambie.
+  const refreshRateFromAPI = useCallback(async () => {
     setIsUpdating(true);
     try {
       // 1. Llama a la API
@@ -27,20 +27,17 @@ export default function BCVWidget({ onRateChange }: BCVWidgetProps) {
       
       // 2. Actualiza los estados
       setRate(data.rate);
-      setLastUpdated(data.lastUpdated); // Usa la fecha de la API si está disponible
+      setLastUpdated(data.lastUpdated); 
       
       // 3. Notifica a los padres
       onRateChange?.(data.rate);
-
-      // Aquí podrías reintroducir setBCVRate(data.rate, "api") si necesitas guardar en el almacenamiento local
       
     } catch (error) {
       console.error("Error refreshing rate:", error);
-      // Aquí podrías añadir un estado para mostrar el error al usuario
     } finally {
       setIsUpdating(false);
     }
-  }
+  }, [onRateChange]) // Depende de onRateChange (que estabilizaremos en el padre)
 
   // Hook para la actualización automática y al montar el componente
   useEffect(() => {
@@ -54,13 +51,11 @@ export default function BCVWidget({ onRateChange }: BCVWidgetProps) {
 
     // 3. Función de limpieza: Detiene el intervalo al desmontar el componente
     return () => clearInterval(intervalId);
-  }, [onRateChange])
+  // 🚨 CORRECCIÓN CLAVE 2: Ahora el useEffect solo depende de la versión memoizada de la función.
+  }, [refreshRateFromAPI])
 
 
   const handleUpdateRate = () => {
-    // Si la actualización es manual, solo guarda el nuevo valor
-    // y actualiza la hora localmente (sin llamar a la API).
-    // setBCVRate(rate, "manual") // Descomentar si usas almacenamiento local
     setLastUpdated(new Date())
     onRateChange?.(rate)
   }

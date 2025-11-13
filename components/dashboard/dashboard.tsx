@@ -101,14 +101,28 @@ export default function Dashboard() {
                   <h1 className="text-2xl font-bold text-foreground">{businessName}</h1>
                   <p className="text-sm text-muted-foreground">{user?.email}</p>
                   
-                  {/* VISUALIZACIÓN DEL ESTADO DEL TRIAL */}
+                  {/* ⭐️ CORRECCIÓN MODO OSCURO: Estado de la prueba (Restante) */}
                   {userPlan === "trial" && remainingDays !== null && remainingDays > 0 && (
-                    <p className="text-sm font-semibold text-orange-600 mt-1 p-1 bg-yellow-100/50 rounded-md inline-block">
+                    <p className="
+                      text-sm font-semibold 
+                      text-orange-600 dark:text-orange-300 
+                      mt-1 p-1 
+                      bg-yellow-100/50 dark:bg-yellow-900/30 
+                      rounded-md inline-block
+                    ">
                       Período de prueba: {remainingDays} {remainingDays === 1 ? 'día' : 'días'} restantes ⏳
                     </p>
                   )}
+                  
+                  {/* ⭐️ CORRECCIÓN MODO OSCURO: Estado de la prueba (Expirado) */}
                   {userPlan === "trial" && remainingDays === 0 && (
-                    <p className="text-sm font-semibold text-red-600 mt-1 p-1 bg-red-100/50 rounded-md inline-block">
+                    <p className="
+                      text-sm font-semibold 
+                      text-red-600 dark:text-red-300 
+                      mt-1 p-1 
+                      bg-red-100/50 dark:bg-red-900/30 
+                      rounded-md inline-block
+                    ">
                       Período de prueba finalizado. ¡Actualiza tu plan! 🛑
                     </p>
                   )}
