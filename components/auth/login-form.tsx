@@ -3,7 +3,8 @@
 import type React from "react"
 import { useState } from "react"
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3"
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification } from "firebase/auth"
+// ✅ Importar la función para restablecer contraseña
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification, sendPasswordResetEmail } from "firebase/auth"
 import { auth, db } from "@/lib/firebase"
 import { doc, setDoc, getDoc } from "firebase/firestore"
 import { Button } from "@/components/ui/button"
@@ -142,6 +143,37 @@ export default function LoginForm() {
       setError("Error al enviar el correo. Inténtalo de nuevo más tarde.")
     } finally {
       setLoading(false)
+    }
+  }
+
+  // ✅ NUEVA FUNCIÓN: Restablecer Contraseña
+  const handlePasswordReset = async () => {
+    // 1. Verificar si el campo de correo está lleno
+    if (!email) {
+      setError("Por favor, ingresa tu correo electrónico para restablecer la contraseña.");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+    setSuccessMessage("");
+
+    try {
+      // 2. Enviar el correo de restablecimiento de Firebase
+      await sendPasswordResetEmail(auth, email);
+
+      setSuccessMessage(`Se ha enviado un correo de restablecimiento a ${email}. Por favor, revisa tu bandeja de entrada (y la carpeta de spam).`);
+
+    } catch (err: any) {
+      if (err.code === 'auth/user-not-found') {
+        // Por seguridad, es mejor no revelar si el correo existe o no
+        setError("Si el correo electrónico es correcto, recibirás un enlace para restablecer tu contraseña.");
+      } else {
+        setError("Hubo un error al intentar enviar el correo de restablecimiento.");
+      }
+    } finally {
+      setLoading(false);
+      setPassword(""); // Limpiar la contraseña después del intento
     }
   }
 
@@ -440,6 +472,18 @@ export default function LoginForm() {
               >
                 {isLogin ? "¿No tienes cuenta? Regístrate" : "¿Ya tienes cuenta? Inicia sesión"}
               </button>
+              
+              {/* ✅ BOTÓN OLVIDÉ MI CONTRASEÑA (Solo visible en Login) */}
+              {isLogin && (
+                <button
+                  type="button"
+                  onClick={handlePasswordReset}
+                  className="w-full text-xs text-muted-foreground hover:underline mt-1"
+                  disabled={loading || !email}
+                >
+                  {loading ? "Enviando..." : "Olvidé mi Contraseña"}
+                </button>
+              )}
             </div>
           </form>
 
