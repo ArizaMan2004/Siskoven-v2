@@ -3,15 +3,16 @@
 import { useState, useEffect } from "react"
 import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/firebase"
-import { collection, query, where, getDocs } from "firebase/firestore"
+// 🔑 CORRECCIÓN 1: Importar doc y getDoc para leer un solo documento
+import { collection, query, where, getDocs, doc, getDoc } from "firebase/firestore"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { generateInventoryReport, generateInvoice, generateProductLabels } from "@/lib/pdf-generator"
 import { getBCVRate } from "@/lib/bcv-service"
 import { FileText, Download } from "lucide-react"
-// ⭐️ NUEVO: Importación para animaciones
 import { motion } from "framer-motion"
 
+// Interfaces... (restante igual)
 interface Product {
   id: string
   name: string
@@ -42,7 +43,8 @@ export default function ReportsView() {
   const { user } = useAuth()
   const [products, setProducts] = useState<Product[]>([])
   const [sales, setSales] = useState<Sale[]>([])
-  const [businessName, setBusinessName] = useState("Mi Comercio")
+  // Deja el valor inicial como fallback
+  const [businessName, setBusinessName] = useState("Mi Comercio") 
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -55,6 +57,19 @@ export default function ReportsView() {
     if (!user) return
     setLoading(true)
     try {
+      // 🔑 CORRECCIÓN 2: Lógica para obtener el businessName del documento 'usuarios'
+      const userDocRef = doc(db, "usuarios", user.uid);
+      const userDoc = await getDoc(userDocRef);
+
+      if (userDoc.exists()) {
+        const data = userDoc.data();
+        if (data.businessName) {
+          // Si encuentra el campo, actualiza el estado a "geralds"
+          setBusinessName(data.businessName as string); 
+        }
+      }
+      // FIN DE LA LÓGICA DE CORRECCIÓN
+
       const productsQuery = query(collection(db, "productos"), where("userId", "==", user.uid))
       const productsSnapshot = await getDocs(productsQuery)
       const productsData = productsSnapshot.docs.map((doc) => ({
@@ -70,7 +85,6 @@ export default function ReportsView() {
         ...doc.data(),
       })) as Sale[]
 
-      // 🔥 Ordenar ventas de la más reciente a la más antigua
       const sortedSales = salesData.sort((a, b) => b.createdAt.toDate() - a.createdAt.toDate())
 
       setSales(sortedSales)
@@ -81,6 +95,7 @@ export default function ReportsView() {
     }
   }
 
+  // Las funciones de manejo de PDF usan el businessName del estado, lo cual ahora es correcto.
   const handleGenerateInventoryReport = () => {
     const bcvData = getBCVRate()
     generateInventoryReport(products, businessName, bcvData.rate)
@@ -100,18 +115,18 @@ export default function ReportsView() {
   }
 
   return (
-    // ⭐️ AJUSTE DE ANIMACIÓN: motion.div envuelve todo el contenido
     <motion.div
-      initial={{ opacity: 0, y: 20 }} // Comienza invisible y 20px abajo
-      animate={{ opacity: 1, y: 0 }}  // Termina visible y en su posición (subiendo)
-      transition={{ duration: 0.5, ease: "easeOut" }} // Duración de 0.5 segundos
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, ease: "easeOut" }}
       className="space-y-4 md:space-y-6"
     >
       <div>
         <h2 className="text-2xl md:text-3xl font-bold text-foreground mb-2 md:mb-4">Reportes</h2>
         <p className="text-sm md:text-base text-muted-foreground">Genera reportes e invoices en PDF</p>
       </div>
-
+      
+      {/* Resto del JSX... (igual) */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Card>
           <CardHeader className="px-4 pt-4 md:px-6 md:pt-6">

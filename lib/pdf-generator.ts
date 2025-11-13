@@ -94,12 +94,17 @@ export function generateInventoryReport(products: Product[], businessName: strin
     ]
   })
 
-  // 2. Tabla (con estilos de filas alternas)
+  // 2. Tabla (CON BORDES NEGROS)
   autoTable(doc, {
     startY: 45, 
     head: [["Producto", "Categoría", "Cantidad", "Costo Unidad USD", "Precio USD", "Precio Bs"]],
     body: tableData,
-    styles: { fontSize: 9, cellPadding: 2.5 },
+    styles: { 
+      fontSize: 9, 
+      cellPadding: 2.5,
+      lineColor: 0,   // Color de línea negro
+      lineWidth: 0.1  // Grosor de línea
+    },
     headStyles: { fillColor: [79, 53, 248], textColor: 255, fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [245, 245, 250] },
     margin: { top: 40, left: 14, right: 14 }
@@ -149,33 +154,39 @@ export function generateInvoice(
     `Bs ${(item.priceBs).toFixed(2)}`, 
   ])
 
-  // 3. Tabla (con estilos de filas alternas)
+  // 3. Tabla (CON BORDES NEGROS)
   autoTable(doc, {
     startY: 40,
     head: [["#", "Producto", "Cantidad", "Precio USD (Unit)", "Total Bs (Línea)"]], 
     body: tableData,
-    styles: { fontSize: 10, cellPadding: 3 },
+    styles: { 
+      fontSize: 10, 
+      cellPadding: 3,
+      lineColor: 0,   // Color de línea negro
+      lineWidth: 0.1  // Grosor de línea
+    },
     headStyles: { fillColor: [79, 53, 248], textColor: 255, fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [245, 245, 250] },
     margin: { top: 40, left: 14, right: 14 }
   })
 
-  // 4. Totales (Bloque destacado)
+  // 4. Totales (Bloque destacado) - CORREGIDO PARA EVITAR SUPERPOSICIÓN
   const finalY = (doc as any).lastAutoTable.finalY + 10
-  const marginX = 140
+  const labelX = 140 // Posición X para las etiquetas "TOTAL USD" y "TOTAL BS"
+  const valueX = 195 // Posición X para los valores, ajustado para el margen derecho
   
   doc.setFont("helvetica", "bold")
   doc.setFontSize(12)
 
-  // Total USD
-  doc.text("TOTAL USD:", marginX, finalY)
-  doc.text(`$${totalUsd.toFixed(2)}`, 190, finalY, { align: "right" })
+  // Total USD (Línea 1)
+  doc.text("TOTAL USD:", labelX, finalY)
+  doc.text(`$${totalUsd.toFixed(2)}`, valueX, finalY, { align: "right" })
 
-  // Total Bs (Más grande y en color primario)
+  // Total Bs (Línea 2, separada 8mm)
   doc.setFontSize(14)
   doc.setTextColor(79, 53, 248) 
-  doc.text("TOTAL BS:", marginX, finalY + 8)
-  doc.text(`Bs ${totalBs.toFixed(2)}`, 190, finalY + 8, { align: "right" })
+  doc.text("TOTAL BS:", labelX, finalY + 8)
+  doc.text(`Bs ${totalBs.toFixed(2)}`, valueX, finalY + 8, { align: "right" })
   doc.setTextColor(0) // Reset color
 
   doc.setFontSize(8)
