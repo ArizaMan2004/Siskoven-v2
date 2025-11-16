@@ -9,8 +9,10 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Trash2, Plus, Minus, Scan, ShoppingCart, Search } from "lucide-react"
+// Asumiendo que estas funciones existen y son funcionales
 import { initBarcodeScanner } from "@/lib/barcode-scanner"
-import { getBCVRate } from "@/lib/bcv-service"
+// Importa getBCVRate. Asegúrate de que esta función exista y retorne { rate: number }
+import { getBCVRate } from "@/lib/bcv-service" 
 
 interface Product {
   id: string
@@ -27,19 +29,23 @@ interface CartItem {
   productId: string
   name: string
   quantity: number
-  priceUsd: number
-  priceBs: number
+  priceUsd: number // Precio unitario de venta (USD)
+  priceBs: number // Precio total de la línea (Bs)
   saleType: "unit" | "weight" 
   kg?: number 
 }
 
 type PaymentMethod = "debit" | "cash" | "transfer" | "mixed" | "pagoMovil" | "zelle" | "binance"
 
+// ----------------------------------------------------
+// 🛑 Componente Principal
+// ----------------------------------------------------
+
 export default function SalesView() {
   const { user } = useAuth()
   const [products, setProducts] = useState<Product[]>([])
   const [cart, setCart] = useState<CartItem[]>([])
-  const [bcvRate, setBcvRate] = useState(216.37)
+  const [bcvRate, setBcvRate] = useState(216.37) // Valor inicial de respaldo
   const [scannerActive, setScannerActive] = useState(false)
   const [barcodeInput, setBarcodeInput] = useState("")
   const [loading, setLoading] = useState(true)
@@ -49,32 +55,50 @@ export default function SalesView() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash")
   const [mixedUsd, setMixedUsd] = useState<string>("")
   const [mixedBs, setMixedBs] = useState<string>("")
-
+  const [discountPercentage, setDiscountPercentage] = useState(0) // 👈 NUEVO: Estado para % de descuento
+  
+  // ----------------------------------------------------
+  // 💡 Carga Inicial: Productos y Tasa BCV
+  // ----------------------------------------------------
   useEffect(() => {
     if (!user) return
     loadProducts()
-    const bcvData = getBCVRate()
-    setBcvRate(bcvData.rate)
+    
+    const fetchBcvRate = async () => {
+      try {
+        // Asume que getBCVRate() es síncrono si no usas await o es una simulación
+        const bcvData = getBCVRate() 
+        const rate = Number(bcvData.rate)
+        // ✅ CORRECCIÓN CLAVE: Asegurar que la tasa es un número finito y positivo.
+        if (Number.isFinite(rate) && rate > 0) {
+          setBcvRate(rate)
+        }
+      } catch (error) {
+        console.warn("Error fetching BCV rate, using default value.", error)
+      }
+    }
+    fetchBcvRate()
   }, [user])
   
   // ----------------------------------------------------
-  // 💡 BLOQUE DE CÁLCULO DE TOTALES (POSICIÓN CORREGIDA)
+  // 💡 BLOQUE DE CÁLCULO DE TOTALES (ROBUSTO)
   // ----------------------------------------------------
   // Totales base (antes de descuento)
   const baseTotalBs = cart.reduce((sum, i) => sum + i.priceBs, 0)
-  const baseTotalUsd = baseTotalBs / bcvRate
+  const safeBcvRate = bcvRate > 0 ? bcvRate : 1 // 🚨 Seguridad: Tasa mínima 1 para evitar división por cero
+  const baseTotalUsd = baseTotalBs / safeBcvRate
 
-  // Lógica de descuento
-  const methodsWithDiscount = ["cash", "zelle", "binance"]
-  const discount = methodsWithDiscount.includes(paymentMethod) ? 0.3 : 0
+  // Lógica de Descuento Dinámico
+  const safeDiscount = Math.max(0, Math.min(100, Number(discountPercentage) || 0)); // Limita el input entre 0 y 100
+  const discountRate = safeDiscount / 100; // Tasa de descuento como decimal (0 a 1)
   
-  // 🚨 DEFINICIÓN DE TOTALUSD Y TOTALBS (Ahora se definen antes de usarse)
-  const totalUsd = baseTotalUsd * (1 - discount)
-  const totalBs = totalUsd * bcvRate
+  // DEFINICIÓN DE TOTALUSD Y TOTALBS (Aplicando el descuento)
+  const totalUsd = baseTotalUsd * (1 - discountRate) // Fórmula: Precio * (1 - Tasa)
+  const totalBs = totalUsd * safeBcvRate
   
-  // Texto de descuento
-  const discountText = discount > 0 
-    ? `Descuento (30% ${paymentMethod === 'cash' ? 'Efectivo USD' : paymentMethod.toUpperCase()}):` 
+  // Texto de descuento actualizado
+  const discountText = discountRate > 0 
+    ? `Descuento Aplicado (${safeDiscount.toFixed(0)}%):` 
     : 'Descuento:'
   // ----------------------------------------------------
 
@@ -86,26 +110,24 @@ export default function SalesView() {
 
   // 🔁 Actualizar automáticamente los montos del pago mixto según lo que se ingrese
   useEffect(() => {
-    if (paymentMethod !== "mixed") return
+    if (paymentMethod !== "mixed" || !Number.isFinite(totalUsd)) return
 
-    // Ahora totalUsd y totalBs existen aquí
-    const totalEnBs = totalUsd * bcvRate 
+    const totalEnBs = totalUsd * safeBcvRate 
 
     // Si el usuario escribe en USD, calculamos el resto en Bs
     if (mixedUsd && !isNaN(Number.parseFloat(mixedUsd)) && document.activeElement?.id === "usd-input") {
       const usd = Number.parseFloat(mixedUsd)
-      const restanteBs = Math.max(totalEnBs - usd * bcvRate, 0)
+      const restanteBs = Math.max(totalEnBs - usd * safeBcvRate, 0)
       setMixedBs(restanteBs.toFixed(2))
     }
 
     // Si el usuario escribe en Bs, calculamos el resto en USD
     if (mixedBs && !isNaN(Number.parseFloat(mixedBs)) && document.activeElement?.id === "bs-input") {
       const bs = Number.parseFloat(mixedBs)
-      const restanteUsd = Math.max((totalEnBs - bs) / bcvRate, 0)
+      const restanteUsd = Math.max((totalEnBs - bs) / safeBcvRate, 0)
       setMixedUsd(restanteUsd.toFixed(2))
     }
-  // 🚨 totalUsd está en las dependencias, lo cual está bien.
-  }, [mixedUsd, mixedBs, paymentMethod, bcvRate, totalUsd]) 
+  }, [mixedUsd, mixedBs, paymentMethod, safeBcvRate, totalUsd]) 
 
   const loadProducts = async () => {
     if (!user) return
@@ -113,7 +135,17 @@ export default function SalesView() {
     try {
       const q = query(collection(db, "productos"), where("userId", "==", user.uid))
       const snapshot = await getDocs(q)
-      const productsData = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })) as Product[]
+      const productsData = snapshot.docs.map((doc) => {
+          const data = doc.data()
+          return ({ 
+              id: doc.id, 
+              ...data,
+              // ⭐️ CORRECCIÓN CLAVE: Forzar la conversión a número para evitar NaN
+              costUsd: Number(data.costUsd) || 0,
+              quantity: Number(data.quantity) || 0,
+              profit: Number(data.profit) || 0,
+          }) 
+      }) as Product[]
       setProducts(productsData)
     } catch (error) {
       console.error("Error loading products:", error)
@@ -128,35 +160,40 @@ export default function SalesView() {
     else alert(`Producto con código ${code} no encontrado`)
   }
 
-  // ⭐️ FUNCIÓN CORREGIDA: Usa la fórmula de Margen Bruto (unificada)
+  // ⭐️ FUNCIÓN REVISADA: Implementación robusta de PV = Costo / (1 - Margen)
   const calculateSalePrice = (product: Product) => {
-    let profitDecimal = product.profit > 1 ? product.profit / 100 : product.profit
+    const costUsd = Number(product.costUsd)
     
-    // Si el margen es inválido o 100% (causando división por cero), lo ponemos en 0.
-    if (isNaN(profitDecimal) || profitDecimal < 0 || profitDecimal >= 1) {
-        profitDecimal = 0;
+    // 1. Validar Costo
+    if (!Number.isFinite(costUsd) || costUsd <= 0) {
+        return 0; 
     }
 
-    // 💡 Margen Bruto: PV = Costo / (1 - Margen)
+    // Convertir porcentaje a decimal si es necesario
+    let profitDecimal = product.profit > 1 ? product.profit / 100 : product.profit
+    
+    // 2. Validar Margen (Evitar 100% o inválido)
+    if (!Number.isFinite(profitDecimal) || profitDecimal < 0 || profitDecimal >= 1) {
+        profitDecimal = 0; // Margen 0 para evitar división por cero o negativo
+    }
+
+    // 3. Cálculo de Margen Bruto: PV = Costo / (1 - Margen)
     const divisor = 1 - profitDecimal;
+    const salePrice = costUsd / divisor;
     
-    // El cálculo es el mismo para unit/weight ya que costUsd es el costo por la unidad base.
-    const salePrice = product.costUsd / divisor;
-    
+    // 4. Resultado final (debe ser finito)
     return Number.isFinite(salePrice) ? salePrice : 0;
   }
 
   const openAddDialog = (product: Product) => {
     let quantity = 1
     let kg = undefined as number | undefined
-    let quantityType = "unidad"
-
+    
     if (product.saleType === "weight") {
-      quantityType = "kg"
       const rawQuantity = prompt(`Ingresa cantidad de kg de ${product.name}:`, "1")
       if (!rawQuantity) return
       kg = Number.parseFloat(rawQuantity) 
-      if (isNaN(kg) || kg <= 0) return alert("Kg inválidos")
+      if (!Number.isFinite(kg) || kg <= 0) return alert("Kg inválidos")
       quantity = kg
     }
     
@@ -164,8 +201,12 @@ export default function SalesView() {
   }
 
   const addToCart = (product: Product, quantity: number, widthCm?: number, heightCm?: number, kg?: number) => {
-    const salePriceUnit = calculateSalePrice(product) // Precio por unidad, kg
-    const totalPriceUsd = salePriceUnit * quantity
+    const salePriceUnit = calculateSalePrice(product) // Precio por unidad o por kg (USD)
+    
+    if (salePriceUnit === 0) {
+        alert("No se pudo calcular el precio de venta. Revise costo y margen del producto.");
+        return;
+    }
 
     // Inventario: Ambos tipos afectan el inventario
     if (quantity > product.quantity) { 
@@ -173,30 +214,38 @@ export default function SalesView() {
       return
     }
 
-    // Key matching: Simplificado para tipos con cantidad (weight)
-    const keyMatches = (i: CartItem) =>
-      i.productId === product.id &&
-      i.saleType === product.saleType &&
-      // Coincide el valor 'kg' solo si el tipo es 'weight'
-      (i.saleType === "weight" ? i.kg === kg : true)
+    // Key matching: Usa una clave única para ítems de peso
+    const itemKey = product.saleType === "weight" 
+        ? `${product.id}-${kg}` 
+        : product.id
+        
+    const existingItemIndex = cart.findIndex(i => 
+      (i.saleType === "weight" ? `${i.productId}-${i.kg}` : i.productId) === itemKey
+    )
 
-    const existingItem = cart.find(keyMatches)
+    if (existingItemIndex !== -1) {
+      const existingItem = cart[existingItemIndex]
+      const newQuantity = Number(existingItem.quantity) + Number(quantity)
+      
+      // Chequeo de inventario con nueva cantidad
+      if (newQuantity > product.quantity) {
+          alert("Cantidad no disponible")
+          return
+      }
 
-    if (existingItem) {
-      // Si el ítem ya existe, se suma la cantidad
-      existingItem.quantity = Number(existingItem.quantity) + Number(quantity)
-      existingItem.priceBs = salePriceUnit * existingItem.quantity * bcvRate
+      existingItem.quantity = newQuantity
+      // Se recalcula el total de la línea
+      existingItem.priceBs = existingItem.priceUsd * newQuantity * safeBcvRate
       setCart([...cart])
     } else {
       const item: CartItem = {
         productId: product.id,
         name: product.name,
         quantity,
-        priceUsd: salePriceUnit,
-        priceBs: totalPriceUsd * bcvRate,
+        priceUsd: salePriceUnit, // Precio unitario (USD)
+        priceBs: salePriceUnit * quantity * safeBcvRate, // Total de la línea (Bs)
         saleType: product.saleType,
       }
-      // Se establece kg solo para peso
       if (product.saleType === "weight") {
         item.kg = kg
       }
@@ -204,60 +253,104 @@ export default function SalesView() {
     }
   }
 
-  const removeFromCart = (productId: string) => {
-    setCart(cart.filter((i) => i.productId !== productId))
+  const removeFromCart = (itemToRemove: CartItem) => {
+    setCart(cart.filter((i) => {
+      // Usa la misma lógica de clave que addToCart
+      const itemKey = i.saleType === "weight" 
+        ? `${i.productId}-${i.kg}` 
+        : i.productId
+      const itemToRemoveKey = itemToRemove.saleType === "weight" 
+        ? `${itemToRemove.productId}-${itemToRemove.kg}` 
+        : itemToRemove.productId
+      
+      return itemKey !== itemToRemoveKey
+    }))
   }
 
-  const updateQuantity = (item: CartItem, newQuantity: number) => {
-    if (newQuantity <= 0) {
-      // Usar el ID del ítem, no el de producto si queremos eliminar
-      setCart(cart.filter((i) => i.productId !== item.productId || (item.saleType === "weight" && i.kg === item.kg)))
+  const updateQuantity = (item: CartItem, newQuantityInput: number) => {
+    // Asegurar que la cantidad es un número válido
+    const newQuantity = Number.parseFloat(newQuantityInput.toFixed(2))
+
+    if (newQuantity <= 0 || !Number.isFinite(newQuantity)) {
+      removeFromCart(item)
       return
     }
+    
     const product = products.find((p) => p.id === item.productId)
     if (!product) return
+
     // Inventario: Ambos tipos afectan el inventario
     if (newQuantity > product.quantity) {
       alert("Cantidad no disponible")
       return
     }
+    
+    // Encontrar el índice del ítem para mutar el array de forma segura
+    const itemKey = item.saleType === "weight" 
+        ? `${item.productId}-${item.kg}` 
+        : item.productId
+
+    const existingItemIndex = cart.findIndex(i => 
+      (i.saleType === "weight" ? `${i.productId}-${i.kg}` : i.productId) === itemKey
+    )
+    
+    if (existingItemIndex === -1) return;
+    
+    const updatedCart = [...cart]
+    const itemToUpdate = updatedCart[existingItemIndex]
+
     // item.priceUsd contiene el precio unitario
-    item.quantity = newQuantity
+    itemToUpdate.quantity = newQuantity
     // Se recalcula el precio Bs (Precio Unitario * Nueva Cantidad * Tasa BCV)
-    item.priceBs = item.priceUsd * newQuantity * bcvRate
-    setCart([...cart])
+    itemToUpdate.priceBs = itemToUpdate.priceUsd * newQuantity * safeBcvRate
+    setCart(updatedCart)
   }
 
   const handleCheckout = async () => {
     if (!user) return alert("Usuario no autenticado")
     if (cart.length === 0) return alert("El carrito está vacío")
 
+    // 🚨 Chequeo Final de NaN antes de Checkout
+    if (!Number.isFinite(totalUsd) || !Number.isFinite(totalBs)) {
+        return alert("Error en el cálculo del total. Por favor, revise los precios y la tasa BCV.");
+    }
+
     if (paymentMethod === "mixed") {
       const usd = Number.parseFloat(mixedUsd || "0")
       const bs = Number.parseFloat(mixedBs || "0")
-      const combined = usd * bcvRate + bs
+      const combined = usd * safeBcvRate + bs
       const roundedTotal = Number(totalBs.toFixed(2))
       const sum = Number(combined.toFixed(2))
+
       if (isNaN(usd) || isNaN(bs)) return alert("Ingresa montos válidos para el pago mixto")
-      if (sum !== roundedTotal)
+      if (Math.abs(sum - roundedTotal) > 0.02) // Tolerancia pequeña por errores de redondeo
         return alert(`En pago mixto, la suma ($${usd} + Bs ${bs}) debe equivaler al total Bs ${roundedTotal}`)
     }
 
+    // ⭐️ NUEVO: Confirmación antes de procesar la venta
+    const confirmation = window.confirm(
+      `¿Estás seguro de confirmar la venta?\n\nTotal a Pagar:\nUSD: $${totalUsd.toFixed(2)}\nBs: Bs ${totalBs.toFixed(2)}`
+    );
+
+    if (!confirmation) {
+      return; // Detiene el proceso si el usuario presiona 'Cancelar'
+    }
+    // ----------------------------------------------------
+    
     try {
       const saleData: any = {
         userId: user.uid,
-        // Almacenar el total de la línea en USD para la base de datos
         items: cart.map((item) => ({
           ...item,
-          // Guardar el total USD de la línea para evitar errores en la factura
+          // Guardar el total USD de la línea
           totalUsdLine: item.priceUsd * item.quantity,
-          priceUsd: item.priceUsd, // El precio unitario sigue siendo priceUsd
+          priceUsdUnit: item.priceUsd, // Claridad: Precio Unitario (USD)
         })),
         totalBs,
         totalUsd,
-        bcvRate,
+        bcvRate: safeBcvRate,
         paymentMethod,
-        discountApplied: discount > 0 ? 30 : 0,
+        discountApplied: safeDiscount, // Guardamos el porcentaje dinámico (0-100)
         createdAt: Timestamp.now(),
       }
 
@@ -270,9 +363,9 @@ export default function SalesView() {
 
       await addDoc(collection(db, "ventas"), saleData)
 
+      // Actualización de inventario
       for (const item of cart) {
         const product = products.find((p) => p.id === item.productId)
-        // Ambos tipos actualizan el stock
         if (product) {
           await updateDoc(doc(db, "productos", product.id), {
             quantity: product.quantity - item.quantity,
@@ -284,7 +377,8 @@ export default function SalesView() {
       setCart([])
       setMixedUsd("")
       setMixedBs("")
-      loadProducts()
+      setDiscountPercentage(0) // Reiniciar descuento
+      loadProducts() // Recargar productos para actualizar stock
     } catch (error) {
       console.error("Error registrando venta:", error)
       alert("Error al procesar la venta")
@@ -298,11 +392,10 @@ export default function SalesView() {
   )
 
   return (
-    // ⭐️ AJUSTE DE ANIMACIÓN: motion.div envuelve todo el contenido
     <motion.div
-      initial={{ opacity: 0, y: 20 }} // Comienza invisible y 20px abajo
-      animate={{ opacity: 1, y: 0 }}  // Termina visible y en su posición (subiendo)
-      transition={{ duration: 0.5, ease: "easeOut" }} // Duración de 0.5 segundos
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, ease: "easeOut" }}
       className="relative"
     >
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
@@ -355,7 +448,7 @@ export default function SalesView() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 lg:gap-4">
               {filteredProducts.map((product) => {
                 const salePrice = calculateSalePrice(product)
-                const salePriceBs = salePrice * bcvRate
+                const salePriceBs = salePrice * safeBcvRate
                 return (
                   <Card key={product.id} className="hover:shadow-md transition-shadow">
                     <CardContent className="pt-4">
@@ -434,14 +527,15 @@ export default function SalesView() {
                 ) : (
                   <div className="space-y-3 overflow-y-auto flex-1 pr-2">
                     {cart.map((item) => (
+                      // Usar una clave más robusta para peso: productId-saleType-kg
                       <div
-                        key={`${item.productId}-${item.saleType}-${item.kg || 0}`}
+                        key={`${item.productId}-${item.saleType}-${item.kg || 0}`} 
                         className="border border-border rounded-lg p-3"
                       >
                         <div className="flex justify-between items-start mb-2">
                           <h4 className="font-semibold text-sm">{item.name}</h4>
                           <button
-                            onClick={() => removeFromCart(item.productId)}
+                            onClick={() => removeFromCart(item)} // Cambiado a pasar el item completo
                             className="text-destructive hover:bg-destructive/10 p-1 rounded"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -479,13 +573,36 @@ export default function SalesView() {
                 )}
 
                 <div className="border-t border-border pt-4 space-y-3 flex-shrink-0">
-                  {discount > 0 && (
-                    <div className="flex justify-between text-green-600 text-sm">
-                      <span>{discountText}</span>
-                      <span>- ${(baseTotalUsd * 0.3).toFixed(2)}</span>
-                    </div>
-                  )}
-
+                  
+                  {/* 👇 INPUT PARA DESCUENTO DINÁMICO 👇 */}
+                  <div className="pt-2">
+                    <label htmlFor="discount-input" className="text-sm font-medium flex justify-between items-center">
+                        <span>Porcentaje de Descuento (%)</span>
+                        {/* Muestra el monto del descuento aplicado */}
+                        {discountRate > 0 && (
+                            <span className="text-sm text-green-600 font-semibold">
+                                - ${(baseTotalUsd * discountRate).toFixed(2)} USD
+                            </span>
+                        )}
+                    </label>
+                    <Input
+                      id="discount-input"
+                      type="number"
+                      value={discountPercentage === 0 ? "" : discountPercentage} // Muestra vacío si es 0
+                      onChange={(e) => {
+                          const value = Number.parseInt(e.target.value)
+                          // Establece el valor, si no es un número válido, lo pone en 0
+                          setDiscountPercentage(Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0)
+                      }}
+                      placeholder="0"
+                      min="0"
+                      max="100"
+                      className="w-full text-center text-lg h-10 border-dashed border-2 mt-1"
+                    />
+                  </div>
+                  {/* 👆 INPUT PARA DESCUENTO DINÁMICO 👆 */}
+                  
+                  {/* Totales Actualizados */}
                   <div className="flex justify-between font-semibold">
                     <span>Total USD:</span>
                     <span>${totalUsd.toFixed(2)}</span>
@@ -502,9 +619,9 @@ export default function SalesView() {
                       onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
                       className="w-full px-3 py-2 border border-input rounded-md bg-background mt-2 text-sm"
                     >
-                      <option value="cash">Efectivo (USD) - 30% Dcto.</option>
-                      <option value="zelle">Zelle - 30% Dcto.</option>
-                      <option value="binance">Binance - 30% Dcto.</option>
+                      <option value="cash">Efectivo (USD)</option>
+                      <option value="zelle">Zelle</option>
+                      <option value="binance">Binance</option>
                       <option value="debit">Débito</option>
                       <option value="transfer">Transferencia Bancaria</option>
                       <option value="pagoMovil">Pago Móvil</option>
@@ -546,7 +663,7 @@ export default function SalesView() {
 
                   <Button
                     onClick={handleCheckout}
-                    disabled={cart.length === 0}
+                    disabled={cart.length === 0 || !Number.isFinite(totalUsd) || !Number.isFinite(totalBs)}
                     className="w-full bg-accent hover:bg-accent/90"
                   >
                     Confirmar Venta
