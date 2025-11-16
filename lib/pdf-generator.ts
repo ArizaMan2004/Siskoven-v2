@@ -2,9 +2,22 @@
 
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
+// ⚠️ IMPORTANTE: Necesitas instalar 'jsbarcode' para que esto funcione.
+import JsBarcode from 'jsbarcode'; // <-- ACTIVADO
 
-const PRECIO_M2 = 15 // Precio base por m²
+// ==============================================
+// 🎨 CONFIGURACIÓN GENERAL (COLORES Y ESTILOS)
+// ==============================================
+const PRIMARY_COLOR = [79, 53, 248]        // Morado corporativo
+const LIGHT_ROW = [245, 245, 250]          // Gris suave
+const CARD_TEXT = [50, 50, 50]             // Gris oscuro
+const SUCCESS_GREEN = [40, 167, 69]
 
+const PRECIO_M2 = 15 // Precio base por metro²
+
+// ==============================================
+// 📦 TIPOS
+// ==============================================
 interface Product {
   id: string
   name: string
@@ -13,6 +26,7 @@ interface Product {
   quantity: number
   profit: number
   saleType: "unit" | "weight" | "area"
+  barcode?: string 
 }
 
 interface SaleItem {
@@ -20,102 +34,131 @@ interface SaleItem {
   name: string
   quantity: number
   priceUsd: number
-  priceBs: number
 }
 
-// ===============================================
-// 🎯 Lógica unificada para calcular el precio de venta (MARGEN BRUTO)
-// ===============================================
+// ==============================================
+// 🧮 CALCULAR PRECIO DE VENTA (PROFESIONAL)
+// ==============================================
 function calculateSalePrice(product: Product): number {
+  const costUsd = Number(product.costUsd) || 0
   let profitDecimal = product.profit > 1 ? product.profit / 100 : product.profit
-  
-  // Manejo de errores/valores no deseados: El margen debe ser menor a 100% (1.0)
-  if (isNaN(profitDecimal) || profitDecimal < 0 || profitDecimal >= 1) {
-    profitDecimal = 0; 
+
+  if (!Number.isFinite(profitDecimal) || profitDecimal < 0 || profitDecimal >= 1) {
+    profitDecimal = 0
   }
 
-  // 💡 Divisor de la fórmula de Margen Bruto: 1 - Margen en decimal
-  const divisor = 1 - profitDecimal;
+  const divisor = 1 - profitDecimal
+
+  if (product.saleType === "area") {
+    return PRECIO_M2 / divisor
+  }
+
+  if (costUsd <= 0) return 0
+
+  return costUsd / divisor
+}
+
+// ==============================================
+// 🧰 FUNCIÓN AUXILIAR: OBTENER BCV SEGURO
+// ==============================================
+function safeBCV(bcvRate: number): number {
+  const rate = Number(bcvRate)
+  return (rate > 0 && Number.isFinite(rate)) ? rate : 1
+}
+
+// ==============================================
+// 🖼️ FUNCIÓN AUXILIAR: GENERAR CÓDIGO DE BARRAS (Data URL)
+// ==============================================
+function generateBarcodeDataURL(text: string, canvasWidth: number, canvasHeight: number): string | null {
+  if (typeof window === "undefined" || !text) return null;
   
-  switch (product.saleType) {
-    case "unit":
-    case "weight": {
-      // Precio de Venta = Costo / (1 - Margen en decimal)
-      const salePrice = product.costUsd / divisor;
-      return Number.isFinite(salePrice) ? salePrice : 0
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    
+    // Lógica de JsBarcode activada
+    if (typeof (window as any).JsBarcode !== 'undefined' || typeof JsBarcode !== 'undefined') {
+      const barcodeFunc = (typeof JsBarcode !== 'undefined' ? JsBarcode : (window as any).JsBarcode);
+
+      barcodeFunc(canvas, text, {
+        format: "CODE128",       
+        displayValue: false,     // Desactivamos el texto para posicionarlo con jspdf
+        margin: 0,               
+        width: 1.5,              // Ancho de la barra ajustado
+        height: canvasHeight * 0.7, // Altura de la barra ajustada para ser baja
+        background: "#ffffff",   
+        lineColor: "#000000"     
+      });
+    } else {
+      console.error("JsBarcode no está disponible. Asegúrate de haberlo instalado e importado correctamente.");
+      return null;
     }
-    case "area": {
-      // Precio de Venta m² = Costo Base / (1 - Margen en decimal)
-      const salePrice = PRECIO_M2 / divisor;
-      return Number.isFinite(salePrice) ? salePrice : 0
-    }
-    default:
-      return 0
+
+    return canvas.toDataURL("image/png");
+
+  } catch (e) {
+    console.error("Error al generar el código de barras:", e);
+    return null;
   }
 }
-// ===============================================
 
 
-/**
- * Genera un reporte de inventario en PDF (Diseño Profesional)
- */
+// ==============================================
+// 📘 1. REPORTE DE INVENTARIO (CARTA) - AHORA MUESTRA EN PANTALLA
+// ==============================================
 export function generateInventoryReport(products: Product[], businessName: string, bcvRate: number) {
-  const doc = new jsPDF()
+  const doc = new jsPDF({ format: "letter", unit: "mm" })
+  const safeRate = safeBCV(bcvRate)
 
-  // 1. Título y Cabecera
-  doc.setFontSize(20)
+  // ENCABEZADO
+  doc.setFillColor(...PRIMARY_COLOR)
+  doc.rect(0, 0, 216, 20, "F")
   doc.setFont("helvetica", "bold")
-  doc.text("REPORTE DE INVENTARIO", 14, 15)
-  
+  doc.setFontSize(18)
+  doc.setTextColor(255)
+  doc.text("REPORTE DE INVENTARIO", 14, 12)
+
+  // INFO
+  doc.setTextColor(0)
   doc.setFontSize(10)
   doc.setFont("helvetica", "normal")
-  doc.text(`Comercio: ${businessName}`, 14, 22)
-  
-  // Línea divisoria elegante (color primario)
-  doc.setDrawColor(79, 53, 248) 
-  doc.setLineWidth(0.5)
-  doc.line(14, 25, 200, 25) 
-
-  // Detalles secundarios
-  doc.text(`Fecha de Reporte: ${new Date().toLocaleDateString("es-VE")}`, 14, 32)
-  doc.text(`Tasa BCV: Bs ${bcvRate.toFixed(2)}`, 14, 38)
+  doc.text(`Comercio: ${businessName}`, 14, 28)
+  doc.text(`Fecha: ${new Date().toLocaleDateString("es-VE")}`, 14, 34)
+  doc.text(`Tasa BCV: Bs ${safeRate.toFixed(2)}`, 14, 40) 
 
   const tableData = products.map((p) => {
-    const salePrice = calculateSalePrice(p)
-    const salePriceBs = salePrice * bcvRate
+    const priceUsd = calculateSalePrice(p)
+    const priceBs = priceUsd * safeRate
 
     return [
       p.name,
       p.category,
       `${p.quantity}`,
-      `$${p.costUsd.toFixed(2)}`, 
-      `$${salePrice.toFixed(2)}`,
-      `Bs ${salePriceBs.toFixed(2)}`,
+      `$${p.costUsd.toFixed(2)}`,
+      `$${priceUsd.toFixed(2)}`,
+      `Bs ${priceBs.toFixed(2)}`,
     ]
   })
 
-  // 2. Tabla (CON BORDES NEGROS)
   autoTable(doc, {
-    startY: 45, 
-    head: [["Producto", "Categoría", "Cantidad", "Costo Unidad USD", "Precio USD", "Precio Bs"]],
+    startY: 45,
+    head: [["Producto", "Categoría", "Cantidad", "Costo (USD)", "Precio (USD)", "Precio (Bs)"]],
     body: tableData,
-    styles: { 
-      fontSize: 9, 
-      cellPadding: 2.5,
-      lineColor: 0,   // Color de línea negro
-      lineWidth: 0.1  // Grosor de línea
-    },
-    headStyles: { fillColor: [79, 53, 248], textColor: 255, fontStyle: 'bold' },
-    alternateRowStyles: { fillColor: [245, 245, 250] },
-    margin: { top: 40, left: 14, right: 14 }
+    styles: { fontSize: 9, cellPadding: 3, lineColor: 0, lineWidth: 0.1 },
+    headStyles: { fillColor: PRIMARY_COLOR, textColor: 255, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: LIGHT_ROW },
+    margin: { left: 14, right: 14 },
   })
 
-  doc.save(`inventario_${new Date().toISOString().slice(0, 10)}.pdf`)
+  // CAMBIO A PREVISUALIZACIÓN
+  doc.output('dataurlnewwindow');
 }
 
-/**
- * Genera una factura PDF (Diseño Profesional)
- */
+
+// ==============================================
+// 📗 2. FACTURA EN PDF (CARTA PROFESIONAL) - AHORA MUESTRA EN PANTALLA
+// ==============================================
 export function generateInvoice(
   items: SaleItem[],
   businessName: string,
@@ -123,148 +166,199 @@ export function generateInvoice(
   totalUsd: number,
   paymentMethod: string,
   bcvRate: number,
+  discountApplied: number = 0 
 ) {
-  const doc = new jsPDF()
+  const safeRate = safeBCV(bcvRate)
+  const doc = new jsPDF({ format: "letter", unit: "mm" })
 
-  // 1. Bloque de Título Profesional (Color Primario)
-  doc.setFillColor(79, 53, 248) 
-  doc.rect(0, 0, 210, 20, "F") // Rectángulo azul/morado en la parte superior
-  doc.setFontSize(18)
+  const discountRate = discountApplied / 100
+  const rateFactor = 1 - discountRate
+
+  // ENCABEZADO PROFESIONAL
+  doc.setFillColor(...PRIMARY_COLOR)
+  doc.rect(0, 0, 216, 20, "F")
   doc.setFont("helvetica", "bold")
-  doc.setTextColor(255) // Texto blanco
+  doc.setFontSize(16)
+  doc.setTextColor(255)
   doc.text(businessName.toUpperCase(), 14, 10)
-  doc.setFontSize(12)
+  doc.setFontSize(13)
   doc.text("FACTURA DE VENTA", 14, 16)
-  
-  // Restablecer color de texto a negro
-  doc.setTextColor(0) 
 
-  // 2. Detalles de la Factura
+  // INFO
+  doc.setTextColor(0)
   doc.setFontSize(10)
-  doc.setFont("helvetica", "normal")
-  doc.text(`Fecha: ${new Date().toLocaleString("es-VE")}`, 150, 25)
-  doc.text(`Método de Pago: ${paymentMethod.toUpperCase()}`, 14, 25)
-  doc.text(`Tasa BCV: Bs ${bcvRate.toFixed(2)}`, 14, 30)
+  doc.text(`Fecha: ${new Date().toLocaleString("es-VE")}`, 150, 28)
+  doc.text(`Método de Pago: ${paymentMethod.toUpperCase()}`, 14, 28)
+  doc.text(`Tasa BCV: Bs ${safeRate.toFixed(2)}`, 14, 34)
 
-  const tableData = items.map((item, index) => [
-    (index + 1).toString(),
-    item.name,
-    `${item.quantity}`,
-    `$${item.priceUsd.toFixed(2)}`,
-    `Bs ${(item.priceBs).toFixed(2)}`, 
-  ])
+  if (discountApplied > 0) {
+    doc.setTextColor(...SUCCESS_GREEN)
+    doc.text(`Descuento aplicado: ${discountApplied}%`, 14, 40)
+    doc.setTextColor(0)
+  }
 
-  // 3. Tabla (CON BORDES NEGROS)
-  autoTable(doc, {
-    startY: 40,
-    head: [["#", "Producto", "Cantidad", "Precio USD (Unit)", "Total Bs (Línea)"]], 
-    body: tableData,
-    styles: { 
-      fontSize: 10, 
-      cellPadding: 3,
-      lineColor: 0,   // Color de línea negro
-      lineWidth: 0.1  // Grosor de línea
-    },
-    headStyles: { fillColor: [79, 53, 248], textColor: 255, fontStyle: 'bold' },
-    alternateRowStyles: { fillColor: [245, 245, 250] },
-    margin: { top: 40, left: 14, right: 14 }
+  // TABLA
+  const tableData = items.map((item, index) => {
+    const priceUsdDiscounted = item.priceUsd * rateFactor
+    const totalLineUsdDiscounted = priceUsdDiscounted * item.quantity 
+    const totalLineBs = totalLineUsdDiscounted * safeRate
+
+    return [
+      (index + 1).toString(),
+      item.name,
+      `${item.quantity}`,
+      `$${priceUsdDiscounted.toFixed(2)}`, 
+      `Bs ${totalLineBs.toFixed(2)}`,
+    ]
   })
 
-  // 4. Totales (Bloque destacado) - CORREGIDO PARA EVITAR SUPERPOSICIÓN
+  autoTable(doc, {
+    startY: 48,
+    head: [["#", "Producto", "Cantidad", "Precio USD (Desc.)", "Total Bs"]],
+    body: tableData,
+    styles: { fontSize: 10, cellPadding: 3, lineColor: 0, lineWidth: 0.1 },
+    headStyles: { fillColor: PRIMARY_COLOR, textColor: 255 },
+    alternateRowStyles: { fillColor: LIGHT_ROW },
+    margin: { left: 14, right: 14 },
+  })
+
+  // TOTALES
   const finalY = (doc as any).lastAutoTable.finalY + 10
-  const labelX = 140 // Posición X para las etiquetas "TOTAL USD" y "TOTAL BS"
-  const valueX = 195 // Posición X para los valores, ajustado para el margen derecho
-  
+
   doc.setFont("helvetica", "bold")
   doc.setFontSize(12)
+  doc.text("TOTAL USD:", 140, finalY)
+  doc.text(`$${totalUsd.toFixed(2)}`, 200, finalY, { align: "right" })
 
-  // Total USD (Línea 1)
-  doc.text("TOTAL USD:", labelX, finalY)
-  doc.text(`$${totalUsd.toFixed(2)}`, valueX, finalY, { align: "right" })
-
-  // Total Bs (Línea 2, separada 8mm)
   doc.setFontSize(14)
-  doc.setTextColor(79, 53, 248) 
-  doc.text("TOTAL BS:", labelX, finalY + 8)
+  doc.setTextColor(...PRIMARY_COLOR)
+  doc.text("TOTAL BS:", 140, finalY + 8)
   doc.setFontSize(20)
-  doc.text(`${totalBs.toFixed(2)} Bs.`, valueX, finalY + 16, { align: "right" })
-  doc.setTextColor(0) // Reset color
+  doc.text(`Bs ${totalBs.toFixed(2)}`, 200, finalY + 16, { align: "right" })
+  doc.setTextColor(0)
 
   doc.setFontSize(8)
-  doc.text("Gracias por su compra.", 14, finalY + 20)
+  doc.text("Gracias por su compra.", 14, finalY + 26)
 
-  doc.save(`factura_${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.pdf`)
+  // CAMBIO A PREVISUALIZACIÓN
+  doc.output('dataurlnewwindow');
 }
 
-/**
- * Genera etiquetas de productos en PDF (Diseño Limpio)
- */
+
+// ==============================================
+// 📘 3. ETIQUETAS DE PRODUCTOS (CARTA – LANDSCAPE) - AHORA MUESTRA EN PANTALLA
+// ==============================================
 export function generateProductLabels(products: Product[], bcvRate: number) {
-  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "letter" })
+  const safeRate = safeBCV(bcvRate)
+  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "letter" }) 
 
   const labelsPerRow = 4
   const labelsPerColumn = 4
+  const labelWidth = 60 
+  const labelHeight = 50 
   const marginLeft = 10
   const marginTop = 15
   const horizontalSpace = 65
-  const verticalSpace = 50
-  const labelWidth = 60
-  const labelHeight = 45
+  const verticalSpace = 55 
+  const labelCenterX = labelWidth / 2;
 
-  products.forEach((p, index) => {
+  const productsWithBarcode = products.filter(p => p.barcode);
+
+  productsWithBarcode.forEach((p, i) => {
+    
     const salePrice = calculateSalePrice(p)
-    const salePriceBs = salePrice * bcvRate
+    const salePriceBs = salePrice * safeRate
 
-    const row = Math.floor(index / labelsPerRow) % labelsPerColumn
-    const col = index % labelsPerRow
+    const row = Math.floor(i / labelsPerRow) % labelsPerColumn
+    const col = i % labelsPerRow
 
     const x = marginLeft + col * horizontalSpace
     const y = marginTop + row * verticalSpace
 
-    // Borde más sutil
-    doc.setDrawColor(180) 
-    doc.setLineWidth(0.5)
+    // Marco exterior para el corte (BORDE NEGRO)
+    doc.setDrawColor(0) // Negro
+    doc.setLineWidth(0.2)
     doc.rect(x, y, labelWidth, labelHeight)
 
-    // Nombre del producto
-    doc.setFont("helvetica", "bold")
-    let fontSize = 14 // Tamaño inicial
-    const maxTextWidth = labelWidth - 4; // 56 mm de espacio seguro (de 60mm total)
-    let text = p.name.toUpperCase();
+    // --- SECCIÓN SUPERIOR: INFO y TASA ---
     
-    // ⭐️ LÓGICA DE AJUSTE DE FUENTE
-    // Decrementa la fuente hasta que el texto quepa (mínimo 8pt)
-    while (doc.getTextWidth(text) > maxTextWidth && fontSize > 8) {
-      fontSize -= 0.5;
-      doc.setFontSize(fontSize);
-    }
-    // ⭐️ FIN LÓGICA DE AJUSTE DE FUENTE
-
-    doc.setFontSize(fontSize)
-    doc.text(text, x + labelWidth / 2, y + 10, { align: "center" })
-
-    // Precio USD (Elemento dominante)
-    doc.setFontSize(28)
-    doc.setTextColor(79, 53, 248) // Color primario
-    doc.text(`$${salePrice.toFixed(2)}`, x + labelWidth / 2, y + 27, { align: "center" })
-
-    // Precio Bs (Secundario)
-    doc.setFontSize(11)
+    // 1. Tasa y tipo de venta (Pequeño, arriba a la izquierda)
+    doc.setFontSize(7)
     doc.setFont("helvetica", "normal")
-    doc.setTextColor(50) // Gris oscuro
-    doc.text(`(Bs ${salePriceBs.toFixed(2)})`, x + labelWidth / 2, y + 37, { align: "center" })
+    doc.setTextColor(...CARD_TEXT) // Gris oscuro
+    doc.text(`Venta: ${p.saleType.toUpperCase()} | Tasa: ${safeRate.toFixed(2)} Bs/$`, x + 3, y + 4)
     
-    // Tipo de venta
+    // Línea de separación sutil con el color primario
+    doc.setDrawColor(...PRIMARY_COLOR) 
+    doc.setLineWidth(0.5)
+    doc.line(x + 3, y + 5.5, x + labelWidth - 3, y + 5.5)
+
+    // 2. Nombre del producto (GRANDE Y AJUSTABLE)
+    doc.setFont("helvetica", "bold")
+    let fontSize = 16 // Tamaño inicial grande
+    const maxWidth = labelWidth - 6 
+    while (doc.getTextWidth(p.name.toUpperCase()) > maxWidth && fontSize > 10) {
+      fontSize -= 0.5
+      doc.setFontSize(fontSize)
+    }
+    doc.setTextColor(0) // Negro para el nombre
+    doc.text(p.name.toUpperCase(), x + 3, y + 12) // Desplazado 2mm hacia abajo por la línea
+
+    // 3. Precio en Bs (POSICIÓN DEL SKU)
     doc.setFontSize(8)
-    doc.setFont("helvetica", "italic")
-    doc.text(`Venta: ${p.saleType.toUpperCase()}`, x + labelWidth / 2, y + 43, { align: "center" })
+    doc.setFont("helvetica", "normal")
+    doc.setTextColor(...CARD_TEXT) // Gris oscuro para el precio en Bs
+    doc.text(`PRECIO BS: ${salePriceBs.toFixed(2)}`, x + 3, y + 17) 
 
-    doc.setTextColor(0) // Reset color
 
-    if ((index + 1) % (labelsPerRow * labelsPerColumn) === 0 && index + 1 < products.length) {
+    // --- SECCIÓN MEDIA: PRECIO USD (EL MÁS GRANDE Y CON COLOR) ---
+    const USD_Y_START = 22; 
+    
+    doc.setFontSize(28) // TAMAÑO GIGANTE para precio USD
+    doc.setFont("helvetica", "bold")
+    doc.setTextColor(...PRIMARY_COLOR) // Color corporativo
+    
+    // El valor del precio USD (Alineado a la derecha)
+    doc.text(`$${salePrice.toFixed(2)}`, x + labelWidth - 3, y + USD_Y_START + 8, { align: "right" })
+
+    // --- SECCIÓN INFERIOR: CÓDIGO DE BARRAS ---
+    
+    const BARCODE_HEIGHT_MM = 8; // Altura baja
+    const BARCODE_WIDTH_MM = labelWidth - 8; 
+    
+    // Posicionamiento justo arriba del borde inferior
+    const BARCODE_Y_START = y + labelHeight - BARCODE_HEIGHT_MM - 6; 
+    // Separación aumentada
+    const BARCODE_TEXT_Y = BARCODE_Y_START + BARCODE_HEIGHT_MM + 2.5; 
+
+    if (p.barcode) {
+        // Generar la URL de datos. 
+        const barcodeDataURL = generateBarcodeDataURL(p.barcode, 400, 70); 
+        
+        if (barcodeDataURL) {
+            // Incrustar la imagen del código de barras
+            doc.addImage(
+                barcodeDataURL, 
+                'PNG', 
+                x + 4, // Margen de 4mm
+                BARCODE_Y_START, 
+                BARCODE_WIDTH_MM, 
+                BARCODE_HEIGHT_MM 
+            );
+        }
+
+        // Imprimir el número legible del código de barras (muy pequeño y centrado)
+        doc.setFontSize(6); 
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(...CARD_TEXT); // Gris oscuro
+        doc.text(p.barcode, x + labelCenterX, BARCODE_TEXT_Y, { align: "center" });
+    }
+
+    if ((i + 1) % (labelsPerRow * labelsPerColumn) === 0 && i + 1 < productsWithBarcode.length) {
       doc.addPage()
     }
   })
 
-  doc.save("etiquetas_productos.pdf")
+  // CAMBIO A PREVISUALIZACIÓN
+  doc.output('dataurlnewwindow');
 }

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { motion } from "framer-motion" 
 import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/firebase"
@@ -8,12 +8,19 @@ import { collection, query, where, getDocs, addDoc, updateDoc, doc, Timestamp } 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Trash2, Plus, Minus, Scan, ShoppingCart, Search } from "lucide-react"
-// Asumiendo que estas funciones existen y son funcionales
+import { Trash2, Plus, Minus, Scan, ShoppingCart, Search, UserSearch } from "lucide-react"
 import { initBarcodeScanner } from "@/lib/barcode-scanner"
-// Importa getBCVRate. Asegúrate de que esta función exista y retorne { rate: number }
 import { getBCVRate } from "@/lib/bcv-service" 
 
+// ==============================================
+// 📦 CONSTANTES PARA PREFIJOS
+// ==============================================
+const DOCUMENT_PREFIXES = ["V", "E", "P", "R", "J", "G"];
+const PHONE_PREFIXES = ["0412", "0422", "0414", "0424", "0416", "0426"];
+
+// ==============================================
+// 📦 INTERFACES
+// ==============================================
 interface Product {
   id: string
   name: string
@@ -29,23 +36,23 @@ interface CartItem {
   productId: string
   name: string
   quantity: number
-  priceUsd: number // Precio unitario de venta (USD)
-  priceBs: number // Precio total de la línea (Bs)
+  priceUsd: number
+  priceBs: number
   saleType: "unit" | "weight" 
   kg?: number 
 }
 
 type PaymentMethod = "debit" | "cash" | "transfer" | "mixed" | "pagoMovil" | "zelle" | "binance"
 
-// ----------------------------------------------------
+// ==============================================
 // 🛑 Componente Principal
-// ----------------------------------------------------
+// ==============================================
 
 export default function SalesView() {
   const { user } = useAuth()
   const [products, setProducts] = useState<Product[]>([])
   const [cart, setCart] = useState<CartItem[]>([])
-  const [bcvRate, setBcvRate] = useState(216.37) // Valor inicial de respaldo
+  const [bcvRate, setBcvRate] = useState(216.37)
   const [scannerActive, setScannerActive] = useState(false)
   const [barcodeInput, setBarcodeInput] = useState("")
   const [loading, setLoading] = useState(true)
@@ -55,21 +62,57 @@ export default function SalesView() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash")
   const [mixedUsd, setMixedUsd] = useState<string>("")
   const [mixedBs, setMixedBs] = useState<string>("")
-  const [discountPercentage, setDiscountPercentage] = useState(0) // 👈 NUEVO: Estado para % de descuento
+  const [discountPercentage, setDiscountPercentage] = useState(0)
   
-  // ----------------------------------------------------
+  // 🔑 ESTADOS PARA DATOS DEL CLIENTE
+  const [clientDocumentPrefix, setClientDocumentPrefix] = useState<string>("V")
+  const [clientDocumentNumber, setClientDocumentNumber] = useState("") 
+  const [clientName, setClientName] = useState("")
+  const [clientPhonePrefix, setClientPhonePrefix] = useState<string>("0412")
+  const [clientPhoneNumber, setClientPhoneNumber] = useState("") 
+  const [clientAddress, setClientAddress] = useState("")
+  const [clientId, setClientId] = useState<string | null>(null) 
+  const [isClientSearching, setIsClientSearching] = useState(false)
+  
+  // 🔑 VALORES DERIVADOS LIMPIOS
+  const cleanClientDocumentNumber = clientDocumentNumber.replace(/[^0-9]/g, '')
+  const fullClientDocument = `${clientDocumentPrefix}${cleanClientDocumentNumber}`.trim()
+  const cleanClientPhoneNumber = clientPhoneNumber.replace(/[^0-9]/g, '')
+  const fullClientPhone = `${clientPhonePrefix}${cleanClientPhoneNumber}`.trim()
+  
+  // Tasa de IVA venezolano: 16%
+  const IVA_RATE = 0.16 
+  
+  // ==============================================
   // 💡 Carga Inicial: Productos y Tasa BCV
-  // ----------------------------------------------------
+  // ==============================================
+  const loadProducts = useCallback(async () => {
+    if (!user) return
+    setLoading(true)
+    try {
+      const q = query(collection(db, "productos"), where("userId", "==", user.uid))
+      const querySnapshot = await getDocs(q)
+      const productsData = querySnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as Product[]
+      setProducts(productsData)
+    } catch (error) {
+      console.error("Error loading products:", error)
+    } finally {
+      setLoading(false)
+    }
+  }, [user])
+  
   useEffect(() => {
     if (!user) return
     loadProducts()
     
     const fetchBcvRate = async () => {
       try {
-        // Asume que getBCVRate() es síncrono si no usas await o es una simulación
+        // Asumiendo que getBCVRate retorna un objeto con { rate: number }
         const bcvData = getBCVRate() 
         const rate = Number(bcvData.rate)
-        // ✅ CORRECCIÓN CLAVE: Asegurar que la tasa es un número finito y positivo.
         if (Number.isFinite(rate) && rate > 0) {
           setBcvRate(rate)
         }
@@ -78,113 +121,138 @@ export default function SalesView() {
       }
     }
     fetchBcvRate()
-  }, [user])
-  
-  // ----------------------------------------------------
-  // 💡 BLOQUE DE CÁLCULO DE TOTALES (ROBUSTO)
-  // ----------------------------------------------------
-  // Totales base (antes de descuento)
-  const baseTotalBs = cart.reduce((sum, i) => sum + i.priceBs, 0)
-  const safeBcvRate = bcvRate > 0 ? bcvRate : 1 // 🚨 Seguridad: Tasa mínima 1 para evitar división por cero
-  const baseTotalUsd = baseTotalBs / safeBcvRate
+    
+    // Inicialización del escáner
+    const stopScanner = initBarcodeScanner((code) => {
+        setBarcodeInput(code);
+        handleBarcodeScanned(code);
+    });
+    
+    return () => {
+        if (typeof stopScanner === 'function') {
+            stopScanner();
+        }
+    };
+  }, [user, loadProducts])
 
-  // Lógica de Descuento Dinámico
-  const safeDiscount = Math.max(0, Math.min(100, Number(discountPercentage) || 0)); // Limita el input entre 0 y 100
-  const discountRate = safeDiscount / 100; // Tasa de descuento como decimal (0 a 1)
+  // ==============================================
+  // 💡 FUNCIÓN DE BÚSQUEDA DE CLIENTE POR CÉDULA/RIF
+  // ==============================================
+  const handleClientSearch = async () => {
+    if (!user) return;
+
+    if (cleanClientDocumentNumber.length < 5) {
+        alert("Ingrese un número de Cédula/RIF válido (mínimo 5 dígitos).");
+        return;
+    }
+    
+    const documentToSearch = fullClientDocument;
+
+    setIsClientSearching(true);
+    // Limpiar campos relacionados con la búsqueda anterior
+    setClientId(null); 
+    setClientName("");
+    setClientPhoneNumber("");
+    setClientAddress("");
+
+    try {
+      // Búsqueda en la colección 'clientes'
+      const q = query(
+        collection(db, "clientes"), 
+        where("document", "==", documentToSearch), 
+        where("userId", "==", user.uid)
+      );
+      const snapshot = await getDocs(q);
+
+      if (!snapshot.empty) {
+        const clientData = snapshot.docs[0].data();
+        setClientId(snapshot.docs[0].id);
+        
+        // 1. Rellenar Nombre/Dirección
+        setClientName(clientData.name || "");
+        setClientAddress(clientData.address || "");
+        
+        // 2. Descomponer y rellenar Documento (para mantener el selector)
+        const docInDb = clientData.document as string;
+        if (docInDb && docInDb.length > 1) {
+            const prefix = docInDb.substring(0, 1);
+            if (DOCUMENT_PREFIXES.includes(prefix)) {
+                setClientDocumentPrefix(prefix);
+                setClientDocumentNumber(docInDb.substring(1));
+            } else {
+                setClientDocumentNumber(docInDb); // Si el prefijo no es uno de los estándar, dejarlo como número completo
+            }
+        }
+
+        // 3. Descomponer y rellenar Teléfono
+        const phoneInDb = clientData.phone as string;
+        if (phoneInDb) {
+            let foundPrefix = PHONE_PREFIXES.find(p => phoneInDb.startsWith(p)) || PHONE_PREFIXES[0];
+            let foundNumber = phoneInDb.replace(foundPrefix, '');
+            setClientPhonePrefix(foundPrefix);
+            setClientPhoneNumber(foundNumber);
+        }
+
+        alert(`Cliente encontrado: ${clientData.name}`);
+      } else {
+        setClientId(null);
+        alert(`Cliente con documento ${documentToSearch} no encontrado. Por favor, ingrese el Nombre para registrarlo en la compra.`);
+      }
+    } catch (error) {
+      console.error("Error searching client:", error);
+      alert("Error al buscar cliente.");
+    } finally {
+      setIsClientSearching(false);
+    }
+  };
+
+
+  // ==============================================
+  // 🧮 BLOQUE DE CÁLCULO DE TOTALES (ROBUSTO CON IVA)
+  // ==============================================
+  // 1. Cálculo del Total Base (antes de IVA y Descuento)
+  const baseTotalBs = cart.reduce((sum, i) => sum + i.priceUsd * i.quantity * bcvRate, 0)
+  const safeBcvRate = bcvRate > 0 ? bcvRate : 1 
+  const baseTotalUsd = baseTotalBs / safeBcvRate 
+
+  // 2. Aplicar Descuento
+  const safeDiscount = Math.max(0, Math.min(100, Number(discountPercentage) || 0));
+  const discountRate = safeDiscount / 100;
+  const subtotalUsd = baseTotalUsd * (1 - discountRate) // Subtotal DESPUÉS de descuento, ANTES de IVA
   
-  // DEFINICIÓN DE TOTALUSD Y TOTALBS (Aplicando el descuento)
-  const totalUsd = baseTotalUsd * (1 - discountRate) // Fórmula: Precio * (1 - Tasa)
-  const totalBs = totalUsd * safeBcvRate
+  // 3. Calcular IVA (16% sobre el subtotal descontado)
+  const ivaAmountUsd = subtotalUsd * IVA_RATE
   
-  // Texto de descuento actualizado
+  // 4. Total Final (Subtotal + IVA)
+  const totalUsd = subtotalUsd + ivaAmountUsd
+  const totalBs = totalUsd * safeBcvRate 
+  
   const discountText = discountRate > 0 
     ? `Descuento Aplicado (${safeDiscount.toFixed(0)}%):` 
     : 'Descuento:'
-  // ----------------------------------------------------
-
-  useEffect(() => {
-    if (!scannerActive) return
-    const unsubscribe = initBarcodeScanner(handleBarcodeScanned)
-    return unsubscribe
-  }, [scannerActive, products])
-
-  // 🔁 Actualizar automáticamente los montos del pago mixto según lo que se ingrese
-  useEffect(() => {
-    if (paymentMethod !== "mixed" || !Number.isFinite(totalUsd)) return
-
-    const totalEnBs = totalUsd * safeBcvRate 
-
-    // Si el usuario escribe en USD, calculamos el resto en Bs
-    if (mixedUsd && !isNaN(Number.parseFloat(mixedUsd)) && document.activeElement?.id === "usd-input") {
-      const usd = Number.parseFloat(mixedUsd)
-      const restanteBs = Math.max(totalEnBs - usd * safeBcvRate, 0)
-      setMixedBs(restanteBs.toFixed(2))
-    }
-
-    // Si el usuario escribe en Bs, calculamos el resto en USD
-    if (mixedBs && !isNaN(Number.parseFloat(mixedBs)) && document.activeElement?.id === "bs-input") {
-      const bs = Number.parseFloat(mixedBs)
-      const restanteUsd = Math.max((totalEnBs - bs) / safeBcvRate, 0)
-      setMixedUsd(restanteUsd.toFixed(2))
-    }
-  }, [mixedUsd, mixedBs, paymentMethod, safeBcvRate, totalUsd]) 
-
-  const loadProducts = async () => {
-    if (!user) return
-    setLoading(true)
-    try {
-      const q = query(collection(db, "productos"), where("userId", "==", user.uid))
-      const snapshot = await getDocs(q)
-      const productsData = snapshot.docs.map((doc) => {
-          const data = doc.data()
-          return ({ 
-              id: doc.id, 
-              ...data,
-              // ⭐️ CORRECCIÓN CLAVE: Forzar la conversión a número para evitar NaN
-              costUsd: Number(data.costUsd) || 0,
-              quantity: Number(data.quantity) || 0,
-              profit: Number(data.profit) || 0,
-          }) 
-      }) as Product[]
-      setProducts(productsData)
-    } catch (error) {
-      console.error("Error loading products:", error)
-    } finally {
-      setLoading(false)
-    }
-  }
-
+  // ==============================================
+  
+  // ==============================================
+  // 💡 FUNCIONES AUXILIARES DE VENTA
+  // ==============================================
   const handleBarcodeScanned = (code: string) => {
     const product = products.find((p) => p.barcode === code)
     if (product) openAddDialog(product)
     else alert(`Producto con código ${code} no encontrado`)
   }
 
-  // ⭐️ FUNCIÓN REVISADA: Implementación robusta de PV = Costo / (1 - Margen)
   const calculateSalePrice = (product: Product) => {
     const costUsd = Number(product.costUsd)
-    
-    // 1. Validar Costo
-    if (!Number.isFinite(costUsd) || costUsd <= 0) {
-        return 0; 
-    }
+    if (!Number.isFinite(costUsd) || costUsd <= 0) return 0; 
 
-    // Convertir porcentaje a decimal si es necesario
     let profitDecimal = product.profit > 1 ? product.profit / 100 : product.profit
-    
-    // 2. Validar Margen (Evitar 100% o inválido)
-    if (!Number.isFinite(profitDecimal) || profitDecimal < 0 || profitDecimal >= 1) {
-        profitDecimal = 0; // Margen 0 para evitar división por cero o negativo
-    }
+    if (!Number.isFinite(profitDecimal) || profitDecimal < 0 || profitDecimal >= 1) profitDecimal = 0;
 
-    // 3. Cálculo de Margen Bruto: PV = Costo / (1 - Margen)
     const divisor = 1 - profitDecimal;
     const salePrice = costUsd / divisor;
-    
-    // 4. Resultado final (debe ser finito)
     return Number.isFinite(salePrice) ? salePrice : 0;
   }
-
+  
   const openAddDialog = (product: Product) => {
     let quantity = 1
     let kg = undefined as number | undefined
@@ -197,24 +265,21 @@ export default function SalesView() {
       quantity = kg
     }
     
-    addToCart(product, quantity, undefined, undefined, kg) 
+    addToCart(product, quantity, kg) 
   }
-
-  const addToCart = (product: Product, quantity: number, widthCm?: number, heightCm?: number, kg?: number) => {
-    const salePriceUnit = calculateSalePrice(product) // Precio por unidad o por kg (USD)
+  
+  const addToCart = (product: Product, quantity: number, kg?: number) => {
+    const salePriceUnit = calculateSalePrice(product)
     
     if (salePriceUnit === 0) {
         alert("No se pudo calcular el precio de venta. Revise costo y margen del producto.");
         return;
     }
-
-    // Inventario: Ambos tipos afectan el inventario
     if (quantity > product.quantity) { 
       alert("No hay suficiente inventario")
       return
     }
 
-    // Key matching: Usa una clave única para ítems de peso
     const itemKey = product.saleType === "weight" 
         ? `${product.id}-${kg}` 
         : product.id
@@ -227,14 +292,13 @@ export default function SalesView() {
       const existingItem = cart[existingItemIndex]
       const newQuantity = Number(existingItem.quantity) + Number(quantity)
       
-      // Chequeo de inventario con nueva cantidad
       if (newQuantity > product.quantity) {
           alert("Cantidad no disponible")
           return
       }
 
       existingItem.quantity = newQuantity
-      // Se recalcula el total de la línea
+      // Se recalcula priceBs de la línea (priceUsd * newQuantity * bcvRate)
       existingItem.priceBs = existingItem.priceUsd * newQuantity * safeBcvRate
       setCart([...cart])
     } else {
@@ -242,8 +306,8 @@ export default function SalesView() {
         productId: product.id,
         name: product.name,
         quantity,
-        priceUsd: salePriceUnit, // Precio unitario (USD)
-        priceBs: salePriceUnit * quantity * safeBcvRate, // Total de la línea (Bs)
+        priceUsd: salePriceUnit, // Precio unitario USD
+        priceBs: salePriceUnit * quantity * safeBcvRate, // Precio de línea Bs (base)
         saleType: product.saleType,
       }
       if (product.saleType === "weight") {
@@ -255,7 +319,6 @@ export default function SalesView() {
 
   const removeFromCart = (itemToRemove: CartItem) => {
     setCart(cart.filter((i) => {
-      // Usa la misma lógica de clave que addToCart
       const itemKey = i.saleType === "weight" 
         ? `${i.productId}-${i.kg}` 
         : i.productId
@@ -268,7 +331,6 @@ export default function SalesView() {
   }
 
   const updateQuantity = (item: CartItem, newQuantityInput: number) => {
-    // Asegurar que la cantidad es un número válido
     const newQuantity = Number.parseFloat(newQuantityInput.toFixed(2))
 
     if (newQuantity <= 0 || !Number.isFinite(newQuantity)) {
@@ -279,13 +341,11 @@ export default function SalesView() {
     const product = products.find((p) => p.id === item.productId)
     if (!product) return
 
-    // Inventario: Ambos tipos afectan el inventario
     if (newQuantity > product.quantity) {
       alert("Cantidad no disponible")
       return
     }
     
-    // Encontrar el índice del ítem para mutar el array de forma segura
     const itemKey = item.saleType === "weight" 
         ? `${item.productId}-${item.kg}` 
         : item.productId
@@ -299,21 +359,25 @@ export default function SalesView() {
     const updatedCart = [...cart]
     const itemToUpdate = updatedCart[existingItemIndex]
 
-    // item.priceUsd contiene el precio unitario
     itemToUpdate.quantity = newQuantity
-    // Se recalcula el precio Bs (Precio Unitario * Nueva Cantidad * Tasa BCV)
     itemToUpdate.priceBs = itemToUpdate.priceUsd * newQuantity * safeBcvRate
     setCart(updatedCart)
   }
-
+  
+  // ==============================================
+  // 🛒 Lógica de Checkout FINAL
+  // ==============================================
   const handleCheckout = async () => {
     if (!user) return alert("Usuario no autenticado")
     if (cart.length === 0) return alert("El carrito está vacío")
 
-    // 🚨 Chequeo Final de NaN antes de Checkout
     if (!Number.isFinite(totalUsd) || !Number.isFinite(totalBs)) {
         return alert("Error en el cálculo del total. Por favor, revise los precios y la tasa BCV.");
     }
+    
+    const currentDocument = fullClientDocument;
+    const currentPhone = fullClientPhone;
+    const isClientDataEntered = currentDocument.length >= 6 && clientName.trim().length > 0;
 
     if (paymentMethod === "mixed") {
       const usd = Number.parseFloat(mixedUsd || "0")
@@ -323,34 +387,73 @@ export default function SalesView() {
       const sum = Number(combined.toFixed(2))
 
       if (isNaN(usd) || isNaN(bs)) return alert("Ingresa montos válidos para el pago mixto")
-      if (Math.abs(sum - roundedTotal) > 0.02) // Tolerancia pequeña por errores de redondeo
-        return alert(`En pago mixto, la suma ($${usd} + Bs ${bs}) debe equivaler al total Bs ${roundedTotal}`)
+      if (Math.abs(sum - roundedTotal) > 0.02)
+        return alert(`En pago mixto, la suma ($${usd.toFixed(2)} * ${safeBcvRate.toFixed(2)} + Bs ${bs.toFixed(2)}) debe equivaler al total Bs ${roundedTotal}`)
     }
 
-    // ⭐️ NUEVO: Confirmación antes de procesar la venta
     const confirmation = window.confirm(
-      `¿Estás seguro de confirmar la venta?\n\nTotal a Pagar:\nUSD: $${totalUsd.toFixed(2)}\nBs: Bs ${totalBs.toFixed(2)}`
+      `¿Estás seguro de confirmar la venta?\n\nTotal a Pagar (CON IVA):\nUSD: $${totalUsd.toFixed(2)}\nBs: Bs ${totalBs.toFixed(2)}`
     );
 
     if (!confirmation) {
-      return; // Detiene el proceso si el usuario presiona 'Cancelar'
+      return; 
     }
-    // ----------------------------------------------------
     
     try {
+      let currentClientId = clientId;
+
+      // 🔑 1. REGISTRO DE NUEVO CLIENTE SI ES NECESARIO
+      if (!currentClientId && isClientDataEntered) {
+        
+        // Intentar una última búsqueda (prevenir duplicados)
+        const clientQuery = query(
+          collection(db, "clientes"), 
+          where("document", "==", currentDocument), 
+          where("userId", "==", user.uid)
+        );
+        const clientSnapshot = await getDocs(clientQuery);
+
+        if (!clientSnapshot.empty) {
+          currentClientId = clientSnapshot.docs[0].id;
+        } else {
+          // Registrar nuevo cliente
+          const newClientData = {
+            userId: user.uid,
+            name: clientName.trim(),
+            document: currentDocument, // Documento limpio con prefijo
+            phone: currentPhone || 'N/A', // Teléfono limpio con prefijo
+            address: clientAddress.trim() || 'N/A',
+            createdAt: Timestamp.now(),
+          };
+          const newClientRef = await addDoc(collection(db, "clientes"), newClientData);
+          currentClientId = newClientRef.id;
+          alert(`Nuevo cliente "${clientName}" registrado.`);
+        }
+      }
+
+      // 🔑 2. REGISTRO DE VENTA
       const saleData: any = {
         userId: user.uid,
         items: cart.map((item) => ({
           ...item,
-          // Guardar el total USD de la línea
           totalUsdLine: item.priceUsd * item.quantity,
-          priceUsdUnit: item.priceUsd, // Claridad: Precio Unitario (USD)
+          priceUsdUnit: item.priceUsd, 
         })),
+        clientId: currentClientId, 
+        clientInfo: { 
+            name: clientName || "CLIENTE FINAL",
+            document: currentDocument || "N/A", 
+            phone: currentPhone || "N/A", 
+            address: clientAddress || "N/A",
+        },
+        subtotalUsd: subtotalUsd, 
+        ivaRate: IVA_RATE * 100, 
+        ivaAmountUsd: ivaAmountUsd, 
         totalBs,
-        totalUsd,
+        totalUsd, 
         bcvRate: safeBcvRate,
         paymentMethod,
-        discountApplied: safeDiscount, // Guardamos el porcentaje dinámico (0-100)
+        discountApplied: safeDiscount,
         createdAt: Timestamp.now(),
       }
 
@@ -363,7 +466,7 @@ export default function SalesView() {
 
       await addDoc(collection(db, "ventas"), saleData)
 
-      // Actualización de inventario
+      // 3. Actualizar Inventario
       for (const item of cart) {
         const product = products.find((p) => p.id === item.productId)
         if (product) {
@@ -374,11 +477,19 @@ export default function SalesView() {
       }
 
       alert("Venta registrada exitosamente")
+      // Limpiar estados
       setCart([])
       setMixedUsd("")
       setMixedBs("")
-      setDiscountPercentage(0) // Reiniciar descuento
-      loadProducts() // Recargar productos para actualizar stock
+      setDiscountPercentage(0)
+      setClientId(null)
+      setClientDocumentPrefix("V")
+      setClientDocumentNumber("")
+      setClientName("") 
+      setClientPhonePrefix("0412")
+      setClientPhoneNumber("")
+      setClientAddress("")
+      loadProducts()
     } catch (error) {
       console.error("Error registrando venta:", error)
       alert("Error al procesar la venta")
@@ -391,6 +502,9 @@ export default function SalesView() {
       product.category.toLowerCase().includes(searchTerm.toLowerCase()),
   )
 
+  // ==============================================
+  // 🖥️ JSX (RENDERIZADO)
+  // ==============================================
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -426,7 +540,89 @@ export default function SalesView() {
               </CardContent>
             </Card>
           )}
+          
+          {/* 🔑 SECCIÓN DE DATOS DEL CLIENTE con PREFIJOS y BÚSQUEDA */}
+          <Card>
+              <CardHeader>
+                  <CardTitle className="text-xl font-semibold flex items-center justify-between">
+                      <span>
+                          Datos del Cliente
+                          {clientId && <span className="text-xs text-green-600 ml-2">(REGISTRADO)</span>}
+                      </span>
+                  </CardTitle>
+              </CardHeader>
+              <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  
+                  {/* Campo de búsqueda por Cédula/RIF */}
+                  <div className="relative col-span-1 sm:col-span-2 flex gap-1 items-center">
+                    
+                    <select
+                        value={clientDocumentPrefix}
+                        onChange={(e) => setClientDocumentPrefix(e.target.value)}
+                        className="px-2 py-2 border border-input rounded-md bg-background text-sm h-10 w-[70px] flex-shrink-0"
+                        disabled={isClientSearching}
+                    >
+                        {DOCUMENT_PREFIXES.map(p => <option key={p} value={p}>{p}-</option>)}
+                    </select>
 
+                    <Input 
+                        placeholder="Número de Cédula o RIF" 
+                        value={clientDocumentNumber} 
+                        onChange={(e) => setClientDocumentNumber(e.target.value.replace(/[^0-9]/g, ''))}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleClientSearch();
+                        }}
+                        disabled={isClientSearching}
+                        className="flex-grow"
+                    />
+                    <Button
+                        onClick={handleClientSearch}
+                        variant="ghost"
+                        size="sm"
+                        className="p-1 h-10 w-10 flex-shrink-0"
+                        disabled={isClientSearching || cleanClientDocumentNumber.length < 5}
+                    >
+                        {isClientSearching ? '...' : <UserSearch className="w-5 h-5" />}
+                    </Button>
+                  </div>
+                  
+                  {/* Nombre y Apellido */}
+                  <Input 
+                      placeholder="Nombre y Apellido / Razón Social" 
+                      value={clientName} 
+                      onChange={(e) => setClientName(e.target.value)}
+                      disabled={isClientSearching}
+                  />
+                  
+                  {/* Teléfono con Prefijo */}
+                  <div className="flex gap-1">
+                    <select
+                        value={clientPhonePrefix}
+                        onChange={(e) => setClientPhonePrefix(e.target.value)}
+                        className="px-2 py-2 border border-input rounded-md bg-background text-sm h-10 w-[90px] flex-shrink-0"
+                        disabled={isClientSearching}
+                    >
+                        {PHONE_PREFIXES.map(p => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                    <Input 
+                        placeholder="Número (Ej: 1234567)" 
+                        value={clientPhoneNumber} 
+                        onChange={(e) => setClientPhoneNumber(e.target.value.replace(/[^0-9]/g, ''))} // Limpiar no-números
+                        disabled={isClientSearching}
+                        className="flex-grow"
+                    />
+                  </div>
+
+                  <Input 
+                      placeholder="Dirección (Opcional)" 
+                      value={clientAddress} 
+                      onChange={(e) => setClientAddress(e.target.value)} 
+                      className="col-span-1 sm:col-span-2"
+                      disabled={isClientSearching}
+                  />
+              </CardContent>
+          </Card>
+          
           <div className="mb-6">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
@@ -527,7 +723,6 @@ export default function SalesView() {
                 ) : (
                   <div className="space-y-3 overflow-y-auto flex-1 pr-2">
                     {cart.map((item) => (
-                      // Usar una clave más robusta para peso: productId-saleType-kg
                       <div
                         key={`${item.productId}-${item.saleType}-${item.kg || 0}`} 
                         className="border border-border rounded-lg p-3"
@@ -535,7 +730,7 @@ export default function SalesView() {
                         <div className="flex justify-between items-start mb-2">
                           <h4 className="font-semibold text-sm">{item.name}</h4>
                           <button
-                            onClick={() => removeFromCart(item)} // Cambiado a pasar el item completo
+                            onClick={() => removeFromCart(item)}
                             className="text-destructive hover:bg-destructive/10 p-1 rounded"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -574,11 +769,10 @@ export default function SalesView() {
 
                 <div className="border-t border-border pt-4 space-y-3 flex-shrink-0">
                   
-                  {/* 👇 INPUT PARA DESCUENTO DINÁMICO 👇 */}
+                  {/* INPUT PARA DESCUENTO DINÁMICO */}
                   <div className="pt-2">
                     <label htmlFor="discount-input" className="text-sm font-medium flex justify-between items-center">
                         <span>Porcentaje de Descuento (%)</span>
-                        {/* Muestra el monto del descuento aplicado */}
                         {discountRate > 0 && (
                             <span className="text-sm text-green-600 font-semibold">
                                 - ${(baseTotalUsd * discountRate).toFixed(2)} USD
@@ -588,10 +782,9 @@ export default function SalesView() {
                     <Input
                       id="discount-input"
                       type="number"
-                      value={discountPercentage === 0 ? "" : discountPercentage} // Muestra vacío si es 0
+                      value={discountPercentage === 0 ? "" : discountPercentage}
                       onChange={(e) => {
                           const value = Number.parseInt(e.target.value)
-                          // Establece el valor, si no es un número válido, lo pone en 0
                           setDiscountPercentage(Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0)
                       }}
                       placeholder="0"
@@ -600,14 +793,21 @@ export default function SalesView() {
                       className="w-full text-center text-lg h-10 border-dashed border-2 mt-1"
                     />
                   </div>
-                  {/* 👆 INPUT PARA DESCUENTO DINÁMICO 👆 */}
                   
-                  {/* Totales Actualizados */}
-                  <div className="flex justify-between font-semibold">
+                  {/* Totales Actualizados con IVA */}
+                  <div className="flex justify-between font-medium text-sm">
+                      <span>Subtotal (sin IVA):</span>
+                      <span>${subtotalUsd.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between font-medium text-sm">
+                      <span>IVA ({IVA_RATE * 100}%):</span>
+                      <span>${ivaAmountUsd.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between font-semibold text-lg border-t pt-2">
                     <span>Total USD:</span>
                     <span>${totalUsd.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between font-semibold">
+                  <div className="flex justify-between font-semibold text-xl text-primary">
                     <span>Total Bs:</span>
                     <span>Bs {totalBs.toFixed(2)}</span>
                   </div>
@@ -663,7 +863,7 @@ export default function SalesView() {
 
                   <Button
                     onClick={handleCheckout}
-                    disabled={cart.length === 0 || !Number.isFinite(totalUsd) || !Number.isFinite(totalBs)}
+                    disabled={cart.length === 0 || !Number.isFinite(totalUsd) || !Number.isFinite(totalBs) || isClientSearching}
                     className="w-full bg-accent hover:bg-accent/90"
                   >
                     Confirmar Venta

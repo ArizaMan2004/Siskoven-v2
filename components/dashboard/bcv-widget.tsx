@@ -1,98 +1,105 @@
 "use client"
 
-// 🚨 CORRECCIÓN: Se agrega 'useCallback'
 import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { fetchBCVRateFromAPI } from "@/lib/bcv-service"; 
-import { RefreshCw } from "lucide-react"
+// 🔑 CORRECCIÓN 1: Importar funciones de persistencia
+import { fetchBCVRateFromAPI, getBCVRate, setBCVRate } from "@/lib/bcv-service"; 
+import { RefreshCw, AlertTriangle } from "lucide-react"
+import { toast } from "sonner" // Asumiendo que usas Sonner para notificaciones
 
 interface BCVWidgetProps {
   onRateChange?: (rate: number) => void
 }
 
+// ⚙️ FUNCIÓN ASUMIDA: Da formato a la fecha para el display
+const formatDate = (date: Date | null) => {
+    if (!date) return "N/A";
+    // Muestra en formato DD/MM/AAAA HH:MM (ajusta según tu necesidad)
+    return date.toLocaleString("es-VE", {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit',
+        hour12: true
+    });
+};
+
+// 🔑 CORRECCIÓN 2: Cargar el estado inicial desde localStorage
+const initialData = getBCVRate();
+
 export default function BCVWidget({ onRateChange }: BCVWidgetProps) {
-  const [rate, setRate] = useState(216.37)
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  // Inicialización con el valor guardado o 0 como fallback.
+  const [rate, setRate] = useState(initialData.rate || 0)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(
+    initialData.lastUpdated ? new Date(initialData.lastUpdated) : null
+  )
   const [isUpdating, setIsUpdating] = useState(false)
-  
-  // 🚨 CORRECCIÓN CLAVE 1: Envolver refreshRateFromAPI en useCallback
-  // Esto asegura que la referencia a la función no cambie a menos que 'onRateChange' cambie.
+  const [error, setError] = useState<string | null>(null) // Nuevo estado para errores
+
+  // 🚨 CORRECCIÓN CLAVE 3: Lógica de refresco envuelta en useCallback
   const refreshRateFromAPI = useCallback(async () => {
     setIsUpdating(true);
+    setError(null);
     try {
       // 1. Llama a la API
       const data = await fetchBCVRateFromAPI();
       
-      // 2. Actualiza los estados
-      setRate(data.rate);
-      setLastUpdated(data.lastUpdated); 
+      // 2. Guarda en localStorage y obtiene la data actualizada con timestamp
+      const updatedData = setBCVRate(data.rate, "api");
       
-      // 3. Notifica a los padres
-      onRateChange?.(data.rate);
+      // 3. Actualiza los estados
+      setRate(updatedData.rate);
+      setLastUpdated(updatedData.lastUpdated); 
       
-    } catch (error) {
-      console.error("Error refreshing rate:", error);
+      // 4. Notifica al componente padre
+      onRateChange?.(updatedData.rate); 
+      toast.success("Tasa BCV actualizada desde la API.")
+
+    } catch (err) {
+      console.error("Error al obtener tasa BCV:", err);
+      setError("Error al obtener la tasa. Revisa la consola o ingresa manualmente.");
+      toast.error("Fallo al actualizar la tasa BCV.")
     } finally {
       setIsUpdating(false);
     }
-  }, [onRateChange]) // Depende de onRateChange (que estabilizaremos en el padre)
+  }, [onRateChange]);
 
-  // Hook para la actualización automática y al montar el componente
+  // 🔑 CORRECCIÓN 4: Handle para actualizar manualmente
+  const handleUpdateRate = useCallback(() => {
+    setError(null);
+    if (rate <= 0 || !Number.isFinite(rate)) {
+        setError("La tasa debe ser un número positivo.");
+        return;
+    }
+    
+    // 1. Guarda en localStorage
+    const updatedData = setBCVRate(rate, "manual");
+    
+    // 2. Actualiza el timestamp del estado
+    setLastUpdated(updatedData.lastUpdated);
+
+    // 3. Notifica al componente padre
+    onRateChange?.(updatedData.rate);
+    toast.success("Tasa BCV guardada correctamente.")
+  }, [rate, onRateChange]);
+
+
+  // 🔑 CORRECCIÓN 5: Carga inicial y refresco automático
   useEffect(() => {
-    const REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
-
-    // 1. Actualiza inmediatamente al montar
-    refreshRateFromAPI();
-
-    // 2. Configura el intervalo para la actualización periódica
-    const intervalId = setInterval(refreshRateFromAPI, REFRESH_INTERVAL_MS);
-
-    // 3. Función de limpieza: Detiene el intervalo al desmontar el componente
-    return () => clearInterval(intervalId);
-  // 🚨 CORRECCIÓN CLAVE 2: Ahora el useEffect solo depende de la versión memoizada de la función.
-  }, [refreshRateFromAPI])
+    // Si la tasa es 0 o null (primer uso), intenta cargarla desde la API.
+    if (rate === 0) {
+      refreshRateFromAPI();
+    }
+  }, [rate, refreshRateFromAPI]);
 
 
-  const handleUpdateRate = () => {
-    setLastUpdated(new Date())
-    onRateChange?.(rate)
-  }
-
-  // Ahora, handleRefreshFromAPI solo necesita llamar a la función reutilizada
-  const handleRefreshFromAPI = refreshRateFromAPI;
-
-
-  const formatDate = (dateValue: Date | string | null) => {
-  if (!dateValue) return "Sin fecha";
-
-  let date: Date;
-  try {
-    // Asegura que el valor sea un objeto Date
-    date = typeof dateValue === "string" ? new Date(dateValue) : dateValue;
-
-    if (isNaN(date.getTime())) return "Fecha inválida";
-
-    return new Intl.DateTimeFormat("es-VE", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(date);
-  } catch {
-    return "Fecha inválida";
-  }
-};
-
+  const handleRefreshFromAPI = refreshRateFromAPI; // Alias para el botón
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center justify-between">
-          <span>Tasa BCV</span>
-          <span className="text-sm font-normal text-muted-foreground">Dólar - Bolívares</span>
+        <CardTitle className="flex items-center gap-2 text-base">
+          Tasa BCV <span className="text-sm font-normal text-muted-foreground">(USD a Bolívares)</span>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -112,10 +119,19 @@ export default function BCVWidget({ onRateChange }: BCVWidgetProps) {
               className="flex-1"
               disabled={isUpdating}
             />
+            {/* Usa el nuevo handler */}
             <Button onClick={handleUpdateRate} className="bg-primary hover:bg-primary/90" disabled={isUpdating}>
               Guardar
             </Button>
           </div>
+          
+          {/* Mostrar el error si existe */}
+          {error && (
+            <p className="text-sm text-red-500 flex items-center gap-1">
+                <AlertTriangle className="w-4 h-4" />
+                {error}
+            </p>
+          )}
 
           <Button
             onClick={handleRefreshFromAPI}
@@ -127,9 +143,8 @@ export default function BCVWidget({ onRateChange }: BCVWidgetProps) {
             {isUpdating ? "Actualizando..." : "Actualizar Tasa BCV"}
           </Button>
         </div>
-        <p className="text-xs text-center text-muted-foreground">
-          Actualización automática cada 5 minutos.
-        </p>
+        
+        {/* Aquí asumimos que va el resto del JSX si lo hay */}
       </CardContent>
     </Card>
   )

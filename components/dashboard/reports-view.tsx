@@ -3,11 +3,12 @@
 import { useState, useEffect } from "react"
 import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/firebase"
-// 🔑 CORRECCIÓN 1: Importar doc y getDoc para leer un solo documento
+// 🔑 Importar doc y getDoc para leer un solo documento
 import { collection, query, where, getDocs, doc, getDoc } from "firebase/firestore"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { generateInventoryReport, generateInvoice, generateProductLabels } from "@/lib/pdf-generator"
+// 🔑 Se asume que BusinessInfo se exporta de pdf-generator
+import { generateInventoryReport, generateInvoice, generateProductLabels, BusinessInfo } from "@/lib/pdf-generator" 
 import { getBCVRate } from "@/lib/bcv-service"
 import { FileText, Download } from "lucide-react"
 import { motion } from "framer-motion"
@@ -43,33 +44,64 @@ export default function ReportsView() {
   const { user } = useAuth()
   const [products, setProducts] = useState<Product[]>([])
   const [sales, setSales] = useState<Sale[]>([])
-  // Deja el valor inicial como fallback
   const [businessName, setBusinessName] = useState("Mi Comercio") 
   const [loading, setLoading] = useState(true)
+  const [currentBcvRate, setCurrentBcvRate] = useState<number>(0) 
+  
+  // 🔑 NUEVO ESTADO: Inicializar con datos por defecto/placeholder
+  const [businessInfo, setBusinessInfo] = useState<BusinessInfo>({
+      logoBase64: 'iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4MoaAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAhSURBVHja7cEBDQAAACDqg29+pXAPAAAAAAAAAAAAAAAAAAAAAH8G5vQAAXh0jRkAAAAASUVORK5CYII=', // Placeholder: Pequeña imagen blanca
+      fiscalAddress: "No configurada",
+      fiscalDocument: "No configurado",
+      phoneNumber: "No configurado",
+      email: "No configurado",
+      bankName: "No configurado",
+      bankAccountOwner: "No configurado",
+      bankAccountNumber: "No configurado",
+  });
 
   useEffect(() => {
     if (user) {
       loadData()
     }
   }, [user])
+  
+  useEffect(() => {
+    const rateData = getBCVRate()
+    setCurrentBcvRate(rateData.rate) 
+  }, [])
+
 
   const loadData = async () => {
     if (!user) return
     setLoading(true)
     try {
-      // 🔑 CORRECCIÓN 2: Lógica para obtener el businessName del documento 'usuarios'
+      // Lógica para obtener el businessName y datos fiscales
       const userDocRef = doc(db, "usuarios", user.uid);
       const userDoc = await getDoc(userDocRef);
 
       if (userDoc.exists()) {
         const data = userDoc.data();
+        
         if (data.businessName) {
-          // Si encuentra el campo, actualiza el estado a "geralds"
           setBusinessName(data.businessName as string); 
         }
+        
+        // 🔑 Cargar Información Fiscal y Bancaria del documento de usuario
+        setBusinessInfo({
+            // Se usa el valor por defecto si no existe en la base de datos (|| businessInfo.[...])
+            logoBase64: data.logoBase64 || businessInfo.logoBase64,
+            fiscalAddress: data.fiscalAddress || "Dirección Fiscal, Ciudad, País",
+            fiscalDocument: data.fiscalDocument || "J-00000000",
+            phoneNumber: data.phoneNumber || "0412-1234567",
+            email: data.email || "contacto@tutienda.com",
+            bankName: data.bankName || "Banco Nacional",
+            bankAccountOwner: data.bankAccountOwner || "Nombre del Titular",
+            bankAccountNumber: data.bankAccountNumber || "0100-0000-00-0000000000",
+        });
       }
-      // FIN DE LA LÓGICA DE CORRECCIÓN
-
+      
+      // Cargar Productos
       const productsQuery = query(collection(db, "productos"), where("userId", "==", user.uid))
       const productsSnapshot = await getDocs(productsQuery)
       const productsData = productsSnapshot.docs.map((doc) => ({
@@ -78,6 +110,7 @@ export default function ReportsView() {
       })) as Product[]
       setProducts(productsData)
 
+      // Cargar Ventas
       const salesQuery = query(collection(db, "ventas"), where("userId", "==", user.uid))
       const salesSnapshot = await getDocs(salesQuery)
       const salesData = salesSnapshot.docs.map((doc) => ({
@@ -95,19 +128,35 @@ export default function ReportsView() {
     }
   }
 
-  // Las funciones de manejo de PDF usan el businessName del estado, lo cual ahora es correcto.
   const handleGenerateInventoryReport = () => {
-    const bcvData = getBCVRate()
-    generateInventoryReport(products, businessName, bcvData.rate)
+    if (currentBcvRate === 0) {
+        alert("La tasa BCV no se ha cargado correctamente. Asegúrate de que esté configurada en el widget.");
+        return;
+    }
+    generateInventoryReport(products, businessName, currentBcvRate)
   }
 
   const handleGenerateLabels = () => {
-    const bcvData = getBCVRate()
-    generateProductLabels(products, bcvData.rate)
+    if (currentBcvRate === 0) {
+        alert("La tasa BCV no se ha cargado correctamente. Asegúrate de que esté configurada en el widget.");
+        return;
+    }
+    generateProductLabels(products, currentBcvRate) 
   }
 
+  // 🔑 LÓGICA DE FACTURA ACTUALIZADA
   const handleGenerateInvoice = (sale: Sale) => {
-    generateInvoice(sale.items, businessName, sale.totalBs, sale.totalUsd, sale.paymentMethod, sale.bcvRate)
+    generateInvoice(
+        sale.items, 
+        businessName, 
+        sale.totalBs, 
+        sale.totalUsd, 
+        sale.paymentMethod, 
+        sale.bcvRate,
+        0, // discountApplied
+        "CLIENTE DE EJEMPLO", // Placeholder para el nombre del cliente
+        businessInfo // 🔑 PASAMOS TODA LA INFO FISCAL Y BANCARIA
+    )
   }
 
   if (loading) {
@@ -139,9 +188,14 @@ export default function ReportsView() {
             <p className="text-xs md:text-sm text-muted-foreground mb-4">
               Descarga un reporte completo de tu inventario actual con precios en USD y Bs.
             </p>
-            <Button onClick={handleGenerateInventoryReport} className="w-full gap-2 bg-primary hover:bg-primary/90">
+            <Button 
+                onClick={handleGenerateInventoryReport} 
+                className="w-full gap-2 bg-primary hover:bg-primary/90"
+                // Deshabilitar el botón si la tasa es 0 para evitar PDFs incorrectos.
+                disabled={currentBcvRate === 0} 
+            >
               <Download className="w-4 h-4" />
-              Descargar Reporte
+              {currentBcvRate === 0 ? "Cargando Tasa BCV..." : "Descargar Reporte"}
             </Button>
           </CardContent>
         </Card>
@@ -157,9 +211,14 @@ export default function ReportsView() {
             <p className="text-xs md:text-sm text-muted-foreground mb-4">
               Genera etiquetas imprimibles con los precios de tus productos.
             </p>
-            <Button onClick={handleGenerateLabels} className="w-full gap-2 bg-accent hover:bg-accent/90">
+            <Button 
+                onClick={handleGenerateLabels} 
+                className="w-full gap-2 bg-accent hover:bg-accent/90"
+                // Deshabilitar el botón si la tasa es 0 para evitar PDFs incorrectos.
+                disabled={currentBcvRate === 0}
+            >
               <Download className="w-4 h-4" />
-              Generar Etiquetas
+              {currentBcvRate === 0 ? "Cargando Tasa BCV..." : "Generar Etiquetas"}
             </Button>
           </CardContent>
         </Card>
