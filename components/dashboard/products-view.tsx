@@ -38,10 +38,15 @@ interface FormData {
 }
 
 // ===============================================
-// 🎯 FUNCIÓN DE CÁLCULO (Margen Bruto)
+// 🎯 CONSTANTE DE IVA
+// ===============================================
+const IVA_RATE = 0.16; // 16% de IVA
+
+// ===============================================
+// 🎯 FUNCIÓN DE CÁLCULO 1: Precio Base (Sin IVA)
 // ===============================================
 
-const calculateSalePrice = (product: Product): number => {
+const calculateBaseSalePrice = (product: Product): number => {
     // 1. Normalización del Porcentaje a decimal (ej: 20 -> 0.2)
     let profitDecimal = product.profit > 1 ? product.profit / 100 : product.profit;
 
@@ -50,12 +55,25 @@ const calculateSalePrice = (product: Product): number => {
         profitDecimal = 0; 
     }
 
-    // 3. CÁLCULO DEL PRECIO DE VENTA (Fórmula del Margen Bruto):
-    // Precio de Venta = Costo / (1 - Margen en decimal)
-    const salePrice = product.costUsd / (1 - profitDecimal);
+    // 3. CÁLCULO DEL PRECIO DE VENTA BASE (Fórmula del Margen Bruto):
+    // Precio de Venta Base = Costo / (1 - Margen en decimal)
+    const baseSalePrice = product.costUsd / (1 - profitDecimal);
 
     // 4. Devolvemos el precio válido o 0 si el resultado es infinito/inválido.
-    return Number.isFinite(salePrice) ? salePrice : 0;
+    return Number.isFinite(baseSalePrice) ? baseSalePrice : 0;
+}
+
+// ===============================================
+// 🎯 FUNCIÓN DE CÁLCULO 2: Precio Final (Con IVA)
+// (Esta reemplaza a la función original)
+// ===============================================
+
+const calculateFinalSalePrice = (basePrice: number): number => {
+    // Precio Final = Precio Base * (1 + IVA_RATE)
+    const finalPrice = basePrice * (1 + IVA_RATE);
+
+    // 4. Devolvemos el precio válido o 0.
+    return Number.isFinite(finalPrice) ? finalPrice : 0;
 }
 
 // ===============================================
@@ -145,6 +163,7 @@ export default function ProductsView() {
 
   // ----------------------------------------------------
   // LÓGICA: CÁLCULO DE PRECIOS PARA LA VISTA PREVIA DEL FORMULARIO
+  // (ACTUALIZADA con Precio Base y Precio Final con IVA)
   // ----------------------------------------------------
   const currentCostUsd = Number.parseFloat(formData.costUsd || "0");
   const currentProfit = Number.parseFloat(formData.profit || "0");
@@ -154,9 +173,12 @@ export default function ProductsView() {
       profitDecimal = 0; 
   }
 
-  // Fórmula del Margen Bruto: PV = Costo / (1 - Margen en decimal)
-  const previewSalePriceUsd = currentCostUsd / (1 - profitDecimal);
-  const finalSalePriceUsd = Number.isFinite(previewSalePriceUsd) ? previewSalePriceUsd : 0;
+  // Paso 1: Precio de Venta Base (Sin IVA)
+  const previewSalePriceBaseUsd = currentCostUsd / (1 - profitDecimal);
+  const finalSalePriceBaseUsd = Number.isFinite(previewSalePriceBaseUsd) ? previewSalePriceBaseUsd : 0;
+  
+  // Paso 2: Precio de Venta Final (Con IVA)
+  const finalSalePriceUsd = calculateFinalSalePrice(finalSalePriceBaseUsd);
   const finalSalePriceBs = finalSalePriceUsd * bcvRate;
   // ----------------------------------------------------
 
@@ -384,13 +406,22 @@ export default function ProductsView() {
                   space-y-2
                 ">
                   <h4 className="font-semibold text-blue-800 dark:text-blue-300">Precios Calculados (Vista Previa)</h4>
+                  
+                  {/* Precio de Venta Base (Sin IVA) */}
                   <div className="flex justify-between">
-                      <span className="text-sm text-foreground/70">Precio Venta USD:</span>
-                      <span className="font-bold text-base text-blue-800 dark:text-blue-300">${finalSalePriceUsd.toFixed(2)}</span>
+                      <span className="text-sm text-foreground/70">Precio Venta Base USD (Sin IVA):</span>
+                      <span className="font-bold text-base text-blue-800 dark:text-blue-300">${finalSalePriceBaseUsd.toFixed(2)}</span>
                   </div>
+                  
+                  {/* Precio de Venta Final (Con IVA) */}
+                  <div className="flex justify-between">
+                      <span className="text-sm text-foreground/70">Precio Venta FINAL USD (IVA 16%):</span>
+                      <span className="font-bold text-base text-purple-600 dark:text-purple-400">${finalSalePriceUsd.toFixed(2)}</span>
+                  </div>
+                  
                   <div className="flex justify-between">
                       <span className="text-sm text-foreground/70">
-                        Precio Venta Bs (Tasa: {bcvRate.toFixed(2)}):
+                        Precio Venta FINAL Bs (Tasa: {bcvRate.toFixed(2)}):
                       </span>
                       <span className="font-bold text-base text-green-600 dark:text-green-400">Bs {finalSalePriceBs.toFixed(2)}</span>
                   </div>
@@ -452,8 +483,11 @@ export default function ProductsView() {
                     <th className="text-left py-3 px-4">Producto</th>
                     <th className="text-left py-3 px-4">Categoría</th>
                     <th className="text-right py-3 px-4">Costo Unidad USD</th>
-                    <th className="text-right py-3 px-4">Precio Venta USD</th>
-                    <th className="text-right py-3 px-4">Precio Venta Bs</th>
+                    {/* NUEVO: Precio Venta Base (Sin IVA) */}
+                    <th className="text-right py-3 px-4">Precio Venta USD (Sin IVA)</th>
+                    {/* MODIFICADO: Precio Venta Final (Con IVA) */}
+                    <th className="text-right py-3 px-4">Precio Venta USD (IVA 16%)</th>
+                    <th className="text-right py-3 px-4">Precio Venta Bs (IVA 16%)</th>
                     <th className="text-right py-3 px-4">Unidades Disponibles</th>
                     <th className="text-left py-3 px-4">Tipo</th>
                     <th className="text-center py-3 px-4">Acciones</th>
@@ -461,15 +495,20 @@ export default function ProductsView() {
                 </thead>
                 <tbody>
                   {filteredProducts.map((product) => {
-                    const salePrice = calculateSalePrice(product)
-                    const salePriceBs = salePrice * bcvRate
+                    // CÁLCULOS ACTUALIZADOS
+                    const basePrice = calculateBaseSalePrice(product)
+                    const finalSalePrice = calculateFinalSalePrice(basePrice)
+                    const finalSalePriceBs = finalSalePrice * bcvRate
                     return (
                       <tr key={product.id} className="border-b border-border hover:bg-muted/50">
                         <td className="py-3 px-4 font-medium">{product.name}</td>
                         <td className="py-3 px-4">{product.category}</td>
                         <td className="text-right py-3 px-4">${product.costUsd.toFixed(2)}</td>
-                        <td className="text-right py-3 px-4">${salePrice.toFixed(2)}</td>
-                        <td className="text-right py-3 px-4 font-semibold text-primary">Bs {salePriceBs.toFixed(2)}</td>
+                        {/* NUEVO: Precio Venta Base (Sin IVA) */}
+                        <td className="text-right py-3 px-4">${basePrice.toFixed(2)}</td>
+                        {/* MODIFICADO: Precio Venta Final (Con IVA) */}
+                        <td className="text-right py-3 px-4 font-semibold text-purple-600 dark:text-purple-400">${finalSalePrice.toFixed(2)}</td>
+                        <td className="text-right py-3 px-4 font-semibold text-primary">Bs {finalSalePriceBs.toFixed(2)}</td>
                         <td className="text-right py-3 px-4">{product.quantity}</td>
                         <td className="py-3 px-4 capitalize">{product.saleType}</td>
                         <td className="py-3 px-4">
@@ -506,8 +545,10 @@ export default function ProductsView() {
         ) : (
           <div className="space-y-3">
             {filteredProducts.map((product) => {
-              const salePrice = calculateSalePrice(product)
-              const salePriceBs = salePrice * bcvRate
+              // CÁLCULOS ACTUALIZADOS
+              const basePrice = calculateBaseSalePrice(product)
+              const finalSalePrice = calculateFinalSalePrice(basePrice)
+              const finalSalePriceBs = finalSalePrice * bcvRate
               return (
                 <Card key={product.id} className="border-l-4 border-l-primary">
                   <CardContent className="pt-4 space-y-3">
@@ -521,14 +562,25 @@ export default function ProductsView() {
                         <p className="text-muted-foreground text-xs">Costo USD</p>
                         <p className="font-medium">${product.costUsd.toFixed(2)}</p>
                       </div>
+                      
+                      {/* NUEVO: Precio Base sin IVA */}
                       <div>
-                        <p className="text-muted-foreground text-xs">Venta USD</p>
-                        <p className="font-medium">${salePrice.toFixed(2)}</p>
+                        <p className="text-muted-foreground text-xs">Venta USD (Sin IVA)</p>
+                        <p className="font-medium">${basePrice.toFixed(2)}</p>
                       </div>
+
+                      {/* MODIFICADO: Precio Final con IVA */}
                       <div>
-                        <p className="text-muted-foreground text-xs">Venta Bs</p>
-                        <p className="font-semibold text-primary">Bs {salePriceBs.toFixed(2)}</p>
+                        <p className="text-muted-foreground text-xs">Venta USD (IVA 16%)</p>
+                        <p className="font-semibold text-purple-600 dark:text-purple-400">${finalSalePrice.toFixed(2)}</p>
                       </div>
+
+                      {/* MODIFICADO: Precio Final en Bs */}
+                      <div>
+                        <p className="text-muted-foreground text-xs">Venta Bs (IVA 16%)</p>
+                        <p className="font-semibold text-primary">Bs {finalSalePriceBs.toFixed(2)}</p>
+                      </div>
+                      
                       <div>
                         <p className="text-muted-foreground text-xs">Disponibles</p>
                         <p className="font-medium">{product.quantity}</p>

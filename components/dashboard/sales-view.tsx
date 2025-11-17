@@ -12,6 +12,9 @@ import { Trash2, Plus, Minus, Scan, ShoppingCart, Search, UserSearch } from "luc
 import { initBarcodeScanner } from "@/lib/barcode-scanner"
 import { getBCVRate } from "@/lib/bcv-service" 
 
+// 🔑 IMPORTACIONES DEL GENERADOR DE PDF
+import { generateInvoice, Sale, BusinessInfo } from "@/lib/pdf-generator" 
+
 // ==============================================
 // 📦 CONSTANTES PARA PREFIJOS
 // ==============================================
@@ -73,6 +76,19 @@ export default function SalesView() {
   const [clientAddress, setClientAddress] = useState("")
   const [clientId, setClientId] = useState<string | null>(null) 
   const [isClientSearching, setIsClientSearching] = useState(false)
+
+  // 🔑 ESTADOS PARA INFORMACIÓN DEL NEGOCIO (MOCK UP para el PDF)
+  const [businessName, setBusinessName] = useState("Mi Negocio - Example C.A.")
+  const [businessInfo, setBusinessInfo] = useState<BusinessInfo>({
+    logoBase64: "", // Imagen Base64
+    fiscalAddress: "Av. Principal Sector Industrial, Local #45",
+    fiscalDocument: "J-12345678-0",
+    phoneNumber: "0212-1234567",
+    email: "ventas@minegocio.com",
+    bankName: "Banco Universal",
+    bankAccountOwner: "Mi Negocio, C.A.",
+    bankAccountNumber: "01020000000000000000",
+  })
   
   // 🔑 VALORES DERIVADOS LIMPIOS
   const cleanClientDocumentNumber = clientDocumentNumber.replace(/[^0-9]/g, '')
@@ -218,7 +234,8 @@ export default function SalesView() {
   // 2. Aplicar Descuento
   const safeDiscount = Math.max(0, Math.min(100, Number(discountPercentage) || 0));
   const discountRate = safeDiscount / 100;
-  const subtotalUsd = baseTotalUsd * (1 - discountRate) // Subtotal DESPUÉS de descuento, ANTES de IVA
+  const discountAmountUsd = baseTotalUsd * discountRate; // 🔑 MONTO DE DESCUENTO EN USD
+  const subtotalUsd = baseTotalUsd - discountAmountUsd // Subtotal DESPUÉS de descuento, ANTES de IVA
   
   // 3. Calcular IVA (16% sobre el subtotal descontado)
   const ivaAmountUsd = subtotalUsd * IVA_RATE
@@ -432,6 +449,7 @@ export default function SalesView() {
       }
 
       // 🔑 2. REGISTRO DE VENTA
+      // Se utiliza discountAmountUsd calculado fuera.
       const saleData: any = {
         userId: user.uid,
         items: cart.map((item) => ({
@@ -446,7 +464,7 @@ export default function SalesView() {
             phone: currentPhone || "N/A", 
             address: clientAddress || "N/A",
         },
-        subtotalUsd: subtotalUsd, 
+        subtotalUsd: subtotalUsd, // Post-discount, pre-IVA
         ivaRate: IVA_RATE * 100, 
         ivaAmountUsd: ivaAmountUsd, 
         totalBs,
@@ -454,6 +472,7 @@ export default function SalesView() {
         bcvRate: safeBcvRate,
         paymentMethod,
         discountApplied: safeDiscount,
+        discountUsd: discountAmountUsd, // 🔑 Añadido el monto de descuento en USD
         createdAt: Timestamp.now(),
       }
 
@@ -464,9 +483,36 @@ export default function SalesView() {
         }
       }
 
-      await addDoc(collection(db, "ventas"), saleData)
+      const newSaleRef = await addDoc(collection(db, "ventas"), saleData) // 🔑 OBTENER REFERENCIA
 
-      // 3. Actualizar Inventario
+      // 🔑 3. GENERAR PDF DE FACTURA
+      const saleForPdf: Sale = {
+          id: newSaleRef.id,
+          // Usamos una estructura que satisfaga la interfaz Sale
+          createdAt: { toDate: () => new Date() }, 
+          clientName: clientName || "CONSUMIDOR FINAL",
+          clientDocument: currentDocument || "N/A",
+          clientAddress: clientAddress || "N/A",
+          clientPhone: currentPhone || "N/A",
+          // Mapear CartItem a SaleItem (quitando campos innecesarios para el PDF)
+          cart: cart.map(item => ({
+              productId: item.productId,
+              name: item.name,
+              quantity: item.quantity,
+              priceUsd: item.priceUsd,
+          })),
+          subtotalUsd: subtotalUsd, // Post-discount, pre-IVA
+          discountUsd: discountAmountUsd, // Monto de descuento
+          ivaUsd: ivaAmountUsd,
+          totalUsd: totalUsd,
+          totalBs: totalBs,
+          bcvRate: safeBcvRate,
+          paymentMethod: paymentMethod,
+      }
+
+      generateInvoice(businessName, saleForPdf, businessInfo) // 🔑 LLAMADA A LA FUNCIÓN
+
+      // 4. Actualizar Inventario
       for (const item of cart) {
         const product = products.find((p) => p.id === item.productId)
         if (product) {
@@ -796,7 +842,7 @@ export default function SalesView() {
                   
                   {/* Totales Actualizados con IVA */}
                   <div className="flex justify-between font-medium text-sm">
-                      <span>Subtotal (sin IVA):</span>
+                      <span>Subtotal (Post-desc, Pre-IVA):</span>
                       <span>${subtotalUsd.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between font-medium text-sm">
