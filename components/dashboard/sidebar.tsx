@@ -1,7 +1,8 @@
 "use client"
 
 import { Button } from "@/components/ui/button"
-import { Package, ShoppingCart, BarChart3, TrendingUp } from "lucide-react"
+// 🟢 Se añade 'Calculator' a las importaciones de íconos
+import { Package, ShoppingCart, BarChart3, TrendingUp, Calculator } from "lucide-react" 
 import { ThemeToggle } from "@/components/theme-toggle"
 
 interface SidebarProps {
@@ -21,11 +22,14 @@ export default function Sidebar({
   isDesktopOpen,
   setIsDesktopOpen,
 }: SidebarProps) {
+  
+  // 🟢 Se agrega el nuevo ítem de Calculadora
   const menuItems = [
     { id: "products", label: "Productos", icon: Package },
     { id: "sales", label: "Punto de Venta", icon: ShoppingCart },
     { id: "statistics", label: "Estadísticas", icon: TrendingUp },
     { id: "reports", label: "Reportes", icon: BarChart3 },
+    { id: "calculator", label: "Calculadora", icon: Calculator }, // CLAVE: El ID "calculator" activa el componente en dashboard.tsx
   ]
 
   const sidebarClasses = `

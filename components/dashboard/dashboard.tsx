@@ -1,3 +1,5 @@
+// @/components/orden/dashboard.tsx
+
 "use client"
 
 import { useAuth } from "@/lib/auth-context"
@@ -12,6 +14,8 @@ import StatisticsView from "./statistics-view"
 import ReportsView from "./reports-view"
 import TrialExpirationModal from "./trial-expiration-modal"
 import { Menu, X } from "lucide-react"
+// 🟢 NUEVA IMPORTACIÓN
+import CalculatorView from "./CalculatorView" 
 
 export default function Dashboard() {
   const { user, logout, isTrialExpired } = useAuth()
@@ -144,6 +148,8 @@ export default function Dashboard() {
               {activeView === "sales" && <SalesView />}
               {activeView === "statistics" && <StatisticsView />}
               {activeView === "reports" && <ReportsView />}
+              {/* 🟢 NUEVA VISTA CONDICIONAL */}
+              {activeView === "calculator" && <CalculatorView />}
             </main>
           </div>
         </>
