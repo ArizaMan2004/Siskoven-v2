@@ -21,6 +21,9 @@ import { generateInvoice, Sale, BusinessInfo } from "@/lib/pdf-generator"
 const DOCUMENT_PREFIXES = ["V", "E", "P", "R", "J", "G"];
 const PHONE_PREFIXES = ["0412", "0422", "0414", "0424", "0416", "0426"];
 
+// 🟢 Métodos de pago que aplican el precio en Divisas (Ajustado/Manual)
+const USD_PAYMENT_METHODS: PaymentMethod[] = ["cash", "zelle", "binance"];
+
 // ==============================================
 // 📦 INTERFACES
 // ==============================================
@@ -33,14 +36,15 @@ interface Product {
   profit: number
   saleType: "unit" | "weight" 
   barcode?: string
+  salePriceUsdManual?: number 
 }
 
 interface CartItem {
   productId: string
   name: string
   quantity: number
-  priceUsd: number
-  priceBs: number
+  priceUsd: number 
+  priceBs: number 
   saleType: "unit" | "weight" 
   kg?: number 
 }
@@ -64,7 +68,6 @@ export default function SalesView() {
 
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash")
   const [mixedUsd, setMixedUsd] = useState<string>("")
-  const [mixedBs, setMixedBs] = useState<string>("")
   const [discountPercentage, setDiscountPercentage] = useState(0)
   
   // 🔑 ESTADOS PARA DATOS DEL CLIENTE
@@ -78,8 +81,8 @@ export default function SalesView() {
   const [isClientSearching, setIsClientSearching] = useState(false)
 
   // 🔑 ESTADOS PARA INFORMACIÓN DEL NEGOCIO (MOCK UP para el PDF)
-  const [businessName, setBusinessName] = useState("Mi Negocio - Example C.A.")
-  const [businessInfo, setBusinessInfo] = useState<BusinessInfo>({
+  const [businessName] = useState("Mi Negocio - Example C.A.")
+  const [businessInfo] = useState<BusinessInfo>({ 
     logoBase64: "", // Imagen Base64
     fiscalAddress: "Av. Principal Sector Industrial, Local #45",
     fiscalDocument: "J-12345678-0",
@@ -96,9 +99,6 @@ export default function SalesView() {
   const cleanClientPhoneNumber = clientPhoneNumber.replace(/[^0-9]/g, '')
   const fullClientPhone = `${clientPhonePrefix}${cleanClientPhoneNumber}`.trim()
   
-  // Tasa de IVA venezolano: 16%
-  const IVA_RATE = 0.16 
-  
   // ==============================================
   // 💡 Carga Inicial: Productos y Tasa BCV
   // ==============================================
@@ -110,7 +110,7 @@ export default function SalesView() {
       const querySnapshot = await getDocs(q)
       const productsData = querySnapshot.docs.map((doc) => ({
         id: doc.id,
-        ...doc.data(),
+        ...doc.data(), 
       })) as Product[]
       setProducts(productsData)
     } catch (error) {
@@ -126,7 +126,6 @@ export default function SalesView() {
     
     const fetchBcvRate = async () => {
       try {
-        // Asumiendo que getBCVRate retorna un objeto con { rate: number }
         const bcvData = getBCVRate() 
         const rate = Number(bcvData.rate)
         if (Number.isFinite(rate) && rate > 0) {
@@ -138,7 +137,6 @@ export default function SalesView() {
     }
     fetchBcvRate()
     
-    // Inicialización del escáner
     const stopScanner = initBarcodeScanner((code) => {
         setBarcodeInput(code);
         handleBarcodeScanned(code);
@@ -224,29 +222,104 @@ export default function SalesView() {
 
 
   // ==============================================
-  // 🧮 BLOQUE DE CÁLCULO DE TOTALES (ROBUSTO CON IVA)
+  // 💡 FUNCIÓN PARA CALCULAR EL PRECIO BASE (SIN AJUSTES)
   // ==============================================
-  // 1. Cálculo del Total Base (antes de IVA y Descuento)
-  const baseTotalBs = cart.reduce((sum, i) => sum + i.priceUsd * i.quantity * bcvRate, 0)
-  const safeBcvRate = bcvRate > 0 ? bcvRate : 1 
-  const baseTotalUsd = baseTotalBs / safeBcvRate 
+  const calculateFullBasePrice = (product: Product): number => {
+    const costUsd = Number(product.costUsd);
+    if (!Number.isFinite(costUsd) || costUsd <= 0) return 0; 
 
-  // 2. Aplicar Descuento
+    let profitDecimal = product.profit > 1 ? product.profit / 100 : product.profit;
+    if (!Number.isFinite(profitDecimal) || profitDecimal < 0 || profitDecimal >= 1) profitDecimal = 0;
+
+    const divisor = 1 - profitDecimal;
+    const fullPrice = costUsd / divisor; 
+    return Number.isFinite(fullPrice) ? fullPrice : 0;
+  }
+  
+  // 💡 FUNCIÓN PARA CALCULAR EL PRECIO AJUSTADO (Manual o con 30% de descuento)
+  const calculateAdjustedPrice = (product: Product): number => {
+    const fullPrice = calculateFullBasePrice(product);
+    let finalSalePriceUsd = fullPrice;
+    
+    if (product.salePriceUsdManual && product.salePriceUsdManual > 0) {
+      finalSalePriceUsd = product.salePriceUsdManual;
+    } else if (finalSalePriceUsd > 0) {
+      finalSalePriceUsd = finalSalePriceUsd * (1 - 0.3);
+    }
+
+    return finalSalePriceUsd; 
+  }
+
+  // 🟢 FUNCIÓN PARA OBTENER EL PRECIO A MOSTRAR EN LA LISTA DE PRODUCTOS
+  const getDisplayPrice = (product: Product): { usd: number, bs: number } => {
+    const fullPrice = calculateFullBasePrice(product);
+    const adjustedPrice = calculateAdjustedPrice(product);
+    const safeBcvRate = bcvRate > 0 ? bcvRate : 1;
+    
+    // Si el método de pago está en la lista de USD (cash, zelle, binance), usa el precio ajustado.
+    // Si no está (débito, transferencia, pago móvil, mixto), usa el precio completo.
+    const isUsingUsdPrice = USD_PAYMENT_METHODS.includes(paymentMethod);
+    
+    const priceUsdToUse = isUsingUsdPrice ? adjustedPrice : fullPrice;
+
+    return { 
+        usd: priceUsdToUse, 
+        bs: priceUsdToUse * safeBcvRate 
+    };
+  };
+
+  // ==============================================
+  // 🧮 BLOQUE DE CÁLCULO DE TOTALES (DINÁMICO SEGÚN PAGO)
+  // ==============================================
+  const safeBcvRate = bcvRate > 0 ? bcvRate : 1 
+  
+  // 1. Determine la base del precio a usar (ajustado o completo)
+  const isPayingInUsd = USD_PAYMENT_METHODS.includes(paymentMethod);
+  
+  // 2. Calcular el Total Base, usando el precio correcto por unidad
+  const baseTotalUsd = cart.reduce((sum, itemInCart) => {
+      const product = products.find(p => p.id === itemInCart.productId);
+      if (!product) return sum;
+
+      let unitPriceToUse: number;
+
+      if (isPayingInUsd) {
+          // Si paga en USD: usa el precio ajustado (almacenado en itemInCart.priceUsd)
+          unitPriceToUse = itemInCart.priceUsd; 
+      } else {
+          // Si paga en Bs: usa el precio completo sin descuento
+          unitPriceToUse = calculateFullBasePrice(product);
+      }
+      
+      return sum + (unitPriceToUse * itemInCart.quantity);
+  }, 0);
+  
+  const baseTotalBs = baseTotalUsd * safeBcvRate
+
+  // 3. Aplicar Descuento Adicional (si existe)
   const safeDiscount = Math.max(0, Math.min(100, Number(discountPercentage) || 0));
   const discountRate = safeDiscount / 100;
-  const discountAmountUsd = baseTotalUsd * discountRate; // 🔑 MONTO DE DESCUENTO EN USD
-  const subtotalUsd = baseTotalUsd - discountAmountUsd // Subtotal DESPUÉS de descuento, ANTES de IVA
+  const discountAmountUsd = baseTotalUsd * discountRate; 
+  const subtotalUsd = baseTotalUsd - discountAmountUsd 
   
-  // 3. Calcular IVA (16% sobre el subtotal descontado)
-  const ivaAmountUsd = subtotalUsd * IVA_RATE
+  const ivaAmountUsd = 0 // IVA es 0
   
-  // 4. Total Final (Subtotal + IVA)
-  const totalUsd = subtotalUsd + ivaAmountUsd
+  // 4. Total Final 
+  const totalUsd = subtotalUsd 
   const totalBs = totalUsd * safeBcvRate 
   
   const discountText = discountRate > 0 
     ? `Descuento Aplicado (${safeDiscount.toFixed(0)}%):` 
     : 'Descuento:'
+    
+  // 🔑 LÓGICA DE PAGO MIXTO Y CÁLCULO DE RESTANTE BS
+  const mixedUsdValue = Number.parseFloat(mixedUsd || "0");
+  const usdPortionInBs = mixedUsdValue * safeBcvRate;
+  const remainingBsToPay = totalBs - usdPortionInBs;
+  const safeRemainingBs = Math.max(0, remainingBsToPay); // El monto nunca es negativo
+
+  // Valor que se usará para el registro final de pago Bs (calculado)
+  const mixedBsCheckoutValue = safeRemainingBs;
   // ==============================================
   
   // ==============================================
@@ -258,18 +331,6 @@ export default function SalesView() {
     else alert(`Producto con código ${code} no encontrado`)
   }
 
-  const calculateSalePrice = (product: Product) => {
-    const costUsd = Number(product.costUsd)
-    if (!Number.isFinite(costUsd) || costUsd <= 0) return 0; 
-
-    let profitDecimal = product.profit > 1 ? product.profit / 100 : product.profit
-    if (!Number.isFinite(profitDecimal) || profitDecimal < 0 || profitDecimal >= 1) profitDecimal = 0;
-
-    const divisor = 1 - profitDecimal;
-    const salePrice = costUsd / divisor;
-    return Number.isFinite(salePrice) ? salePrice : 0;
-  }
-  
   const openAddDialog = (product: Product) => {
     let quantity = 1
     let kg = undefined as number | undefined
@@ -286,9 +347,10 @@ export default function SalesView() {
   }
   
   const addToCart = (product: Product, quantity: number, kg?: number) => {
-    const salePriceUnit = calculateSalePrice(product)
+    // Almacena siempre el precio ajustado en el carrito (el precio que se aplica si se paga en USD).
+    const salePriceUnitAdjusted = calculateAdjustedPrice(product) 
     
-    if (salePriceUnit === 0) {
+    if (salePriceUnitAdjusted === 0) {
         alert("No se pudo calcular el precio de venta. Revise costo y margen del producto.");
         return;
     }
@@ -305,6 +367,8 @@ export default function SalesView() {
       (i.saleType === "weight" ? `${i.productId}-${i.kg}` : i.productId) === itemKey
     )
 
+    const linePriceBs = salePriceUnitAdjusted * quantity * safeBcvRate; 
+
     if (existingItemIndex !== -1) {
       const existingItem = cart[existingItemIndex]
       const newQuantity = Number(existingItem.quantity) + Number(quantity)
@@ -315,16 +379,15 @@ export default function SalesView() {
       }
 
       existingItem.quantity = newQuantity
-      // Se recalcula priceBs de la línea (priceUsd * newQuantity * bcvRate)
-      existingItem.priceBs = existingItem.priceUsd * newQuantity * safeBcvRate
+      existingItem.priceBs = linePriceBs 
       setCart([...cart])
     } else {
       const item: CartItem = {
         productId: product.id,
         name: product.name,
         quantity,
-        priceUsd: salePriceUnit, // Precio unitario USD
-        priceBs: salePriceUnit * quantity * safeBcvRate, // Precio de línea Bs (base)
+        priceUsd: salePriceUnitAdjusted, // Almacena el precio AJUSTADO/MANUAL
+        priceBs: linePriceBs, 
         saleType: product.saleType,
       }
       if (product.saleType === "weight") {
@@ -377,7 +440,7 @@ export default function SalesView() {
     const itemToUpdate = updatedCart[existingItemIndex]
 
     itemToUpdate.quantity = newQuantity
-    itemToUpdate.priceBs = itemToUpdate.priceUsd * newQuantity * safeBcvRate
+    itemToUpdate.priceBs = itemToUpdate.priceUsd * newQuantity * safeBcvRate 
     setCart(updatedCart)
   }
   
@@ -397,19 +460,22 @@ export default function SalesView() {
     const isClientDataEntered = currentDocument.length >= 6 && clientName.trim().length > 0;
 
     if (paymentMethod === "mixed") {
-      const usd = Number.parseFloat(mixedUsd || "0")
-      const bs = Number.parseFloat(mixedBs || "0")
-      const combined = usd * safeBcvRate + bs
-      const roundedTotal = Number(totalBs.toFixed(2))
-      const sum = Number(combined.toFixed(2))
+        const usd = Number.parseFloat(mixedUsd || "0")
+        const bs = mixedBsCheckoutValue; // Usamos el valor CALCUADO
+        
+        if (isNaN(usd) || usd < 0) return alert("Ingresa un monto USD válido para el pago mixto");
+        
+        // Verificación de que el total cubierto es correcto
+        const combined = usd * safeBcvRate + bs;
+        const roundedTotal = Number(totalBs.toFixed(2));
+        const sum = Number(combined.toFixed(2));
 
-      if (isNaN(usd) || isNaN(bs)) return alert("Ingresa montos válidos para el pago mixto")
-      if (Math.abs(sum - roundedTotal) > 0.02)
-        return alert(`En pago mixto, la suma ($${usd.toFixed(2)} * ${safeBcvRate.toFixed(2)} + Bs ${bs.toFixed(2)}) debe equivaler al total Bs ${roundedTotal}`)
+        if (Math.abs(sum - roundedTotal) > 0.02)
+            return alert(`Error en el cálculo del pago mixto. La suma de los pagos no cubre el total Bs ${roundedTotal.toFixed(2)}.`);
     }
 
     const confirmation = window.confirm(
-      `¿Estás seguro de confirmar la venta?\n\nTotal a Pagar (CON IVA):\nUSD: $${totalUsd.toFixed(2)}\nBs: Bs ${totalBs.toFixed(2)}`
+      `¿Estás seguro de confirmar la venta?\n\nTotal a Pagar:\nUSD: $${totalUsd.toFixed(2)}\nBs: Bs ${totalBs.toFixed(2)}`
     );
 
     if (!confirmation) {
@@ -419,7 +485,7 @@ export default function SalesView() {
     try {
       let currentClientId = clientId;
 
-      // 🔑 1. REGISTRO DE NUEVO CLIENTE SI ES NECESARIO
+      // 🔑 1. REGISTRO/ACTUALIZACIÓN DE CLIENTE (Lógica Restituida)
       if (!currentClientId && isClientDataEntered) {
         
         // Intentar una última búsqueda (prevenir duplicados)
@@ -449,14 +515,33 @@ export default function SalesView() {
       }
 
       // 🔑 2. REGISTRO DE VENTA
-      // Se utiliza discountAmountUsd calculado fuera.
+      
+      // OBTENER EL PRECIO FINAL REAL POR UNIDAD PARA LA DB/FACTURA
+      const itemsForSale = cart.map((item) => {
+          const product = products.find(p => p.id === item.productId);
+          if (!product) {
+              return { ...item, totalUsdLine: item.priceUsd * item.quantity, priceUsdUnit: item.priceUsd };
+          }
+          
+          let finalUnitUsd: number;
+          if (isPayingInUsd) {
+              // PAGO EN USD: usa el precio ajustado/manual que está en item.priceUsd
+              finalUnitUsd = item.priceUsd; 
+          } else {
+              // PAGO EN BS: usa el precio completo/base
+              finalUnitUsd = calculateFullBasePrice(product);
+          }
+
+          return {
+              ...item,
+              totalUsdLine: finalUnitUsd * item.quantity,
+              priceUsdUnit: finalUnitUsd,
+          };
+      });
+
       const saleData: any = {
         userId: user.uid,
-        items: cart.map((item) => ({
-          ...item,
-          totalUsdLine: item.priceUsd * item.quantity,
-          priceUsdUnit: item.priceUsd, 
-        })),
+        items: itemsForSale, // Usar los items con el precio final correcto
         clientId: currentClientId, 
         clientInfo: { 
             name: clientName || "CLIENTE FINAL",
@@ -464,55 +549,51 @@ export default function SalesView() {
             phone: currentPhone || "N/A", 
             address: clientAddress || "N/A",
         },
-        subtotalUsd: subtotalUsd, // Post-discount, pre-IVA
-        ivaRate: IVA_RATE * 100, 
-        ivaAmountUsd: ivaAmountUsd, 
+        subtotalUsd: subtotalUsd, 
         totalBs,
         totalUsd, 
         bcvRate: safeBcvRate,
         paymentMethod,
         discountApplied: safeDiscount,
-        discountUsd: discountAmountUsd, // 🔑 Añadido el monto de descuento en USD
+        discountUsd: discountAmountUsd, 
         createdAt: Timestamp.now(),
       }
 
       if (paymentMethod === "mixed") {
         saleData.paymentBreakdown = {
           pagoUsd: Number.parseFloat(mixedUsd || "0"),
-          pagoBs: Number.parseFloat(mixedBs || "0"),
+          pagoBs: mixedBsCheckoutValue, // Usamos el valor calculado
         }
       }
 
-      const newSaleRef = await addDoc(collection(db, "ventas"), saleData) // 🔑 OBTENER REFERENCIA
+      const newSaleRef = await addDoc(collection(db, "ventas"), saleData) 
 
       // 🔑 3. GENERAR PDF DE FACTURA
       const saleForPdf: Sale = {
           id: newSaleRef.id,
-          // Usamos una estructura que satisfaga la interfaz Sale
           createdAt: { toDate: () => new Date() }, 
           clientName: clientName || "CONSUMIDOR FINAL",
           clientDocument: currentDocument || "N/A",
           clientAddress: clientAddress || "N/A",
           clientPhone: currentPhone || "N/A",
-          // Mapear CartItem a SaleItem (quitando campos innecesarios para el PDF)
-          cart: cart.map(item => ({
+          cart: itemsForSale.map(item => ({ 
               productId: item.productId,
               name: item.name,
               quantity: item.quantity,
-              priceUsd: item.priceUsd,
+              priceUsd: item.priceUsdUnit, 
           })),
-          subtotalUsd: subtotalUsd, // Post-discount, pre-IVA
-          discountUsd: discountAmountUsd, // Monto de descuento
-          ivaUsd: ivaAmountUsd,
+          subtotalUsd: subtotalUsd, 
+          discountUsd: discountAmountUsd, 
+          ivaUsd: 0, 
           totalUsd: totalUsd,
           totalBs: totalBs,
           bcvRate: safeBcvRate,
           paymentMethod: paymentMethod,
       }
 
-      generateInvoice(businessName, saleForPdf, businessInfo) // 🔑 LLAMADA A LA FUNCIÓN
+      generateInvoice(businessName, saleForPdf, businessInfo) 
 
-      // 4. Actualizar Inventario
+      // 4. Actualizar Inventario 
       for (const item of cart) {
         const product = products.find((p) => p.id === item.productId)
         if (product) {
@@ -526,7 +607,6 @@ export default function SalesView() {
       // Limpiar estados
       setCart([])
       setMixedUsd("")
-      setMixedBs("")
       setDiscountPercentage(0)
       setClientId(null)
       setClientDocumentPrefix("V")
@@ -587,7 +667,7 @@ export default function SalesView() {
             </Card>
           )}
           
-          {/* 🔑 SECCIÓN DE DATOS DEL CLIENTE con PREFIJOS y BÚSQUEDA */}
+          {/* 🔑 SECCIÓN DE DATOS DEL CLIENTE con PREFIJOS y BÚSQUEDA (Restituida) */}
           <Card>
               <CardHeader>
                   <CardTitle className="text-xl font-semibold flex items-center justify-between">
@@ -622,7 +702,7 @@ export default function SalesView() {
                         className="flex-grow"
                     />
                     <Button
-                        onClick={handleClientSearch}
+                        onClick={handleClientSearch} 
                         variant="ghost"
                         size="sm"
                         className="p-1 h-10 w-10 flex-shrink-0"
@@ -653,7 +733,7 @@ export default function SalesView() {
                     <Input 
                         placeholder="Número (Ej: 1234567)" 
                         value={clientPhoneNumber} 
-                        onChange={(e) => setClientPhoneNumber(e.target.value.replace(/[^0-9]/g, ''))} // Limpiar no-números
+                        onChange={(e) => setClientPhoneNumber(e.target.value.replace(/[^0-9]/g, ''))} 
                         disabled={isClientSearching}
                         className="flex-grow"
                     />
@@ -689,8 +769,16 @@ export default function SalesView() {
             <h3 className="text-base lg:text-lg font-semibold mb-3">Productos Disponibles</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 lg:gap-4">
               {filteredProducts.map((product) => {
-                const salePrice = calculateSalePrice(product)
-                const salePriceBs = salePrice * safeBcvRate
+                // Uso de la nueva función para determinar el precio a mostrar
+                const displayPrices = getDisplayPrice(product);
+                const salePrice = displayPrices.usd;
+                const salePriceBs = displayPrices.bs;
+
+                // Marcador visual para saber qué precio se está usando
+                const isFullPrice = !USD_PAYMENT_METHODS.includes(paymentMethod);
+                const priceLabel = isFullPrice ? "PRECIO BASE (Bs)" : "PRECIO USD (Dscto)";
+                const priceColor = isFullPrice ? "text-red-500" : "text-green-500";
+
                 return (
                   <Card key={product.id} className="hover:shadow-md transition-shadow">
                     <CardContent className="pt-4">
@@ -699,9 +787,10 @@ export default function SalesView() {
                         <p className="text-xs text-muted-foreground">{product.category}</p>
                       </div>
                       <div className="space-y-1 mb-3 text-sm">
+                        
                         <div className="flex justify-between items-center">
-                          <span className="text-muted-foreground">USD:</span>
-                          <span className="font-semibold">${salePrice.toFixed(2)}</span>
+                            <span className={`text-xs font-bold ${priceColor}`}>{priceLabel}:</span>
+                            <span className="font-semibold">${salePrice.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-center">
                           <span className="text-muted-foreground">Bs:</span>
@@ -768,54 +857,75 @@ export default function SalesView() {
                   <p className="text-center text-muted-foreground py-8">Carrito vacío</p>
                 ) : (
                   <div className="space-y-3 overflow-y-auto flex-1 pr-2">
-                    {cart.map((item) => (
-                      <div
-                        key={`${item.productId}-${item.saleType}-${item.kg || 0}`} 
-                        className="border border-border rounded-lg p-3"
-                      >
-                        <div className="flex justify-between items-start mb-2">
-                          <h4 className="font-semibold text-sm">{item.name}</h4>
-                          <button
-                            onClick={() => removeFromCart(item)}
-                            className="text-destructive hover:bg-destructive/10 p-1 rounded"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
+                    {cart.map((item) => {
+                      const product = products.find(p => p.id === item.productId);
+                      if (!product) return null;
 
-                        <div className="flex items-center gap-2 mb-2">
-                          <button
-                            onClick={() => updateQuantity(item, Number(item.quantity) - 1)}
-                            className="p-1 hover:bg-muted rounded"
-                          >
-                            <Minus className="w-4 h-4" />
-                          </button>
-                          <Input
-                            type="number"
-                            value={item.quantity}
-                            onChange={(e) => updateQuantity(item, Number.parseFloat(e.target.value))}
-                            className="w-16 text-center text-sm h-8"
-                          />
-                          <button
-                            onClick={() => updateQuantity(item, Number(item.quantity) + 1)}
-                            className="p-1 hover:bg-muted rounded"
-                          >
-                            <Plus className="w-4 h-4" />
-                          </button>
-                        </div>
+                      // LÓGICA DE VISUALIZACIÓN DINÁMICA
+                      const unitPriceFull = calculateFullBasePrice(product);
+                      // Precio unitario a mostrar en el carrito (coincide con el precio del producto si no es USD)
+                      const unitPriceToDisplay = isPayingInUsd ? item.priceUsd : unitPriceFull;
+                      const lineTotalBs = unitPriceToDisplay * item.quantity * safeBcvRate;
 
-                        <div className="text-sm text-muted-foreground">
-                          Bs {item.priceBs.toFixed(2)}
-                          {item.saleType === "weight" && ` — ${item.kg} kg`}
+                      return (
+                        <div
+                          key={`${item.productId}-${item.saleType}-${item.kg || 0}`} 
+                          className="border border-border rounded-lg p-3"
+                        >
+                          <div className="flex justify-between items-start mb-2">
+                            <h4 className="font-semibold text-sm">{item.name}</h4>
+                            <button
+                              onClick={() => removeFromCart(item)}
+                              className="text-destructive hover:bg-destructive/10 p-1 rounded"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+
+                          <div className="flex items-center gap-2 mb-2">
+                            <button
+                              onClick={() => updateQuantity(item, Number(item.quantity) - 1)}
+                              className="p-1 hover:bg-muted rounded"
+                            >
+                              <Minus className="w-4 h-4" />
+                            </button>
+                            <Input
+                              type="number"
+                              value={item.quantity}
+                              onChange={(e) => updateQuantity(item, Number.parseFloat(e.target.value))}
+                              className="w-16 text-center text-sm h-8"
+                            />
+                            <button
+                              onClick={() => updateQuantity(item, Number(item.quantity) + 1)}
+                              className="p-1 hover:bg-muted rounded"
+                            >
+                              <Plus className="w-4 h-4" />
+                            </button>
+                          </div>
+
+                          <div className="text-sm text-muted-foreground">
+                            <span className={`font-semibold ${isPayingInUsd ? 'text-purple-600' : 'text-foreground'}`}>
+                                ${unitPriceToDisplay.toFixed(2)} USD
+                            </span>
+                            x {item.quantity} ud/kg
+                            {item.saleType === "weight" && ` — ${item.kg} kg`}
+                          </div>
+                          <div className="text-base font-semibold text-primary">
+                            Total: Bs {lineTotalBs.toFixed(2)}
+                          </div>
+                          {!isPayingInUsd && (
+                              <p className="text-xs text-muted-foreground mt-1">
+                                  Usando precio completo (${unitPriceFull.toFixed(2)})
+                              </p>
+                          )}
                         </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 )}
 
                 <div className="border-t border-border pt-4 space-y-3 flex-shrink-0">
                   
-                  {/* INPUT PARA DESCUENTO DINÁMICO */}
                   <div className="pt-2">
                     <label htmlFor="discount-input" className="text-sm font-medium flex justify-between items-center">
                         <span>Porcentaje de Descuento (%)</span>
@@ -827,7 +937,6 @@ export default function SalesView() {
                     </label>
                     <Input
                       id="discount-input"
-                      type="number"
                       value={discountPercentage === 0 ? "" : discountPercentage}
                       onChange={(e) => {
                           const value = Number.parseInt(e.target.value)
@@ -840,14 +949,14 @@ export default function SalesView() {
                     />
                   </div>
                   
-                  {/* Totales Actualizados con IVA */}
+                  {/* Totales */}
                   <div className="flex justify-between font-medium text-sm">
-                      <span>Subtotal (Post-desc, Pre-IVA):</span>
-                      <span>${subtotalUsd.toFixed(2)}</span>
+                      <span>Subtotal (Base):</span>
+                      <span>${baseTotalUsd.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between font-medium text-sm">
-                      <span>IVA ({IVA_RATE * 100}%):</span>
-                      <span>${ivaAmountUsd.toFixed(2)}</span>
+                   <div className="flex justify-between font-medium text-sm text-red-600 dark:text-red-400">
+                      <span>{discountText}</span>
+                      <span>- ${discountAmountUsd.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between font-semibold text-lg border-t pt-2">
                     <span>Total USD:</span>
@@ -875,10 +984,11 @@ export default function SalesView() {
                     </select>
                   </div>
 
+                  {/* Componente React de Pago Mixto con cálculo de restante Bs */}
                   {paymentMethod === "mixed" && (
                     <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <label className="text-xs text-muted-foreground">Efectivo (USD)</label>
+                        <label className="text-xs text-muted-foreground">Efectivo (USD) Entregado</label>
                         <Input
                           id="usd-input"
                           value={mixedUsd}
@@ -890,19 +1000,20 @@ export default function SalesView() {
                         />
                       </div>
                       <div>
-                        <label className="text-xs text-muted-foreground">Transferencia (Bs)</label>
+                        <label className="text-xs font-semibold text-primary">Restante en Bs a Pagar</label>
                         <Input
-                          id="bs-input"
-                          value={mixedBs}
-                          onChange={(e) => setMixedBs(e.target.value)}
+                          id="bs-input-calculated"
+                          value={safeRemainingBs.toFixed(2)} 
+                          readOnly 
                           placeholder="0.00"
-                          type="number"
-                          step="0.01"
-                          className="text-sm h-9"
+                          className="text-sm h-9 font-bold bg-primary/10 border-primary"
                         />
                       </div>
                       <div className="col-span-2 text-xs text-muted-foreground">
-                        Se calcula automáticamente el monto restante según la tasa BCV.
+                        {remainingBsToPay > 0 
+                            ? `El cliente debe pagar ${safeRemainingBs.toFixed(2)} Bs adicionales.` 
+                            : "El monto USD cubre el total o hay un excedente."
+                        }
                       </div>
                     </div>
                   )}

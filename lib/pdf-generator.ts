@@ -14,7 +14,7 @@ const LIGHT_ROW = [245, 245, 250]
 const CARD_TEXT = [50, 50, 50]             
 const HEADER_DARK = [44, 52, 60]           
 const PRECIO_M2 = 15 
-// Tasa de IVA establecida al 16%
+// Tasa de IVA establecida al 16% (Mantenida por si se usa en otro lugar, pero ignorada en este script)
 const IVA_RATE = 0.16; 
 
 // ==============================================
@@ -44,7 +44,7 @@ export interface Sale {
     id: string; 
     cart: SaleItem[]; 
     totalBs: number;
-    totalUsd: number; // Este valor es el TOTAL CON IVA (Gran Total)
+    totalUsd: number; // Este valor es el TOTAL NETO (después de descuento, sin IVA)
     paymentMethod: string;
     bcvRate: number;
     
@@ -58,8 +58,8 @@ export interface Sale {
     createdAt: { toDate: () => Date } | null | undefined; 
     
     discountUsd?: number;
-    ivaUsd?: number;
-    subtotalUsd?: number;
+    subtotalUsd?: number; // Total antes de descuento (Base Neta)
+    ivaUsd?: number; // Mantenido por compatibilidad, aunque ya no se usa.
 } 
 
 // Interfaz completa de BusinessInfo 
@@ -87,7 +87,7 @@ function formatBs(amount: number): string {
 
 
 // ==============================================
-// 🧮 CALCULAR PRECIO DE VENTA
+// 🧮 CALCULAR PRECIO DE VENTA (Base)
 // ==============================================
 function calculateSalePrice(product: Product): number {
   const costUsd = Number(product.costUsd) || 0
@@ -99,13 +99,19 @@ function calculateSalePrice(product: Product): number {
 
   const divisor = 1 - profitDecimal
 
+  let calculatedPrice: number;
+
   if (product.saleType === "area") {
-    return PRECIO_M2 / divisor
+    calculatedPrice = PRECIO_M2 / divisor
+  } else if (costUsd <= 0) {
+    calculatedPrice = 0
+  } else {
+    calculatedPrice = costUsd / divisor
   }
 
-  if (costUsd <= 0) return 0
-
-  return costUsd / divisor
+  // >>> ÚNICA LÓGICA DE REDONDEO AGREGADA PARA PRECIOS EN USD <<<
+  // Math.ceil() redondea al entero superior, cumpliendo con la necesidad de manejar billetes.
+  return Math.ceil(calculatedPrice);
 }
 
 // ==============================================
@@ -152,7 +158,7 @@ function generateBarcodeDataURL(text: string, canvasWidth: number, canvasHeight:
 
 
 // ==============================================
-// 📘 1. REPORTE DE INVENTARIO (CARTA) - LA SECCIÓN REQUERIDA
+// 📘 1. REPORTE DE INVENTARIO (CARTA) - SIN IVA
 // ==============================================
 export function generateInventoryReport(products: Product[], businessInfo: BusinessInfo, bcvRate: number) {
   const doc = new jsPDF({ format: "letter", unit: "mm" })
@@ -166,12 +172,9 @@ export function generateInventoryReport(products: Product[], businessInfo: Busin
   const LINE_HEIGHT = 5
   
   // -----------------------------------------------------
-  // 1. ENCABEZADO DE LA EMPRESA (IZQUIERDA) - LÓGICA DE FACTURA
+  // 1. ENCABEZADO DE LA EMPRESA (IZQUIERDA)
   // -----------------------------------------------------
 
-  // A. Logo 
-  // ❗ CORRECCIÓN: Si businessInfo.logoBase64 está vacío o nulo, el logo no se muestra.
-  // La lógica es correcta, el problema está en los datos de entrada.
   if (businessInfo.logoBase64) {
     try {
       doc.addImage(
@@ -191,11 +194,9 @@ export function generateInventoryReport(products: Product[], businessInfo: Busin
   doc.setFont("helvetica", "bold")
   doc.setFontSize(14)
   doc.setTextColor(...HEADER_DARK)
-  // ❗ CORRECCIÓN: Si businessInfo.businessName está vacío o nulo, se muestra "N/A".
-  // La lógica es correcta, debe asegurarse que se pasa el nombre.
   doc.text((businessInfo.businessName || "N/A").toUpperCase(), MARGIN_LEFT + 22, MARGIN_TOP + 5)
   
-  // C. RIF y Contacto (Similar a la factura)
+  // C. RIF y Contacto
   doc.setFont("helvetica", "normal")
   doc.setFontSize(9)
   doc.text(`RIF: ${businessInfo.fiscalDocument || "N/A"}`, MARGIN_LEFT + 22, MARGIN_TOP + 10)
@@ -203,9 +204,8 @@ export function generateInventoryReport(products: Product[], businessInfo: Busin
   doc.text(`Teléfono: ${businessInfo.phoneNumber || "N/A"}`, MARGIN_LEFT + 22, MARGIN_TOP + 20)
   
   // -----------------------------------------------------
-  // 2. BLOQUE REPORTE (DERECHA) - ESTÉTICA FACTURA
+  // 2. BLOQUE REPORTE (DERECHA)
   // -----------------------------------------------------
-  // Se usa HEADER_DARK como en el encabezado de la factura
   doc.setFillColor(...HEADER_DARK) 
   doc.rect(REPORT_BLOCK_X - 10, 0, REPORT_BLOCK_WIDTH + 10, 30, "F") 
 
@@ -235,34 +235,31 @@ export function generateInventoryReport(products: Product[], businessInfo: Busin
   const TABLE_START_Y = INFO_Y_START + LINE_HEIGHT * 2 + 5
 
   const tableData = products.map((p) => {
-    // 1. Precio sin IVA (Precio Base/Neto)
-    const priceUsdNoIva = calculateSalePrice(p)
-    // 2. Precio con IVA (PVP)
-    const priceUsdConIva = priceUsdNoIva * (1 + IVA_RATE)
-    // 3. Precio con IVA en Bolívares (Precio Final al público)
-    const priceBsConIva = priceUsdConIva * safeRate
+    // 1. Precio de Venta (Neto y Redondeado)
+    const salePriceUsd = calculateSalePrice(p)
+    // 2. Precio de Venta en Bolívares (Neto, basado en el precio USD redondeado)
+    const salePriceBs = salePriceUsd * safeRate
 
     return [
       p.name,
       p.category,
       `${p.quantity}`,
       `$${p.costUsd.toFixed(2)}`,
-      `$${priceUsdNoIva.toFixed(2)}`, 
-      `$${priceUsdConIva.toFixed(2)}`,
-      `Bs ${formatBs(priceBsConIva)}`, 
+      `$${salePriceUsd.toFixed(2)}`, 
+      `Bs ${formatBs(salePriceBs)}`, 
     ]
   })
 
   // -----------------------------------------------------
-  // 4. TABLA DE INVENTARIO
+  // 4. TABLA DE INVENTARIO - HEADER Y COLUMNAS AJUSTADAS
   // -----------------------------------------------------
 
   autoTable(doc, {
     startY: TABLE_START_Y,
-    head: [["Producto", "Categoría", "Cantidad", "Costo (USD)", "Precio USD (Sin IVA)", "Precio USD (Con IVA)", "Precio Bs (Con IVA)"]],
+    // Header simplificado
+    head: [["Producto", "Categoría", "Cantidad", "Costo (USD)", "Precio USD", "Precio Bs"]],
     body: tableData,
     styles: { fontSize: 9, cellPadding: 3, lineColor: 0, lineWidth: 0.1 },
-    // Usa el mismo color HEADER_DARK para la tabla de encabezado que la factura
     headStyles: { fillColor: HEADER_DARK, textColor: 255, fontStyle: "bold" },
     alternateRowStyles: { fillColor: LIGHT_ROW },
     margin: { left: MARGIN_LEFT, right: 14 },
@@ -271,12 +268,11 @@ export function generateInventoryReport(products: Product[], businessInfo: Busin
         3: { halign: 'right' },
         4: { halign: 'right' },
         5: { halign: 'right' },
-        6: { halign: 'right' },
     }
   })
 
   // -----------------------------------------------------
-  // 5. PIE DE PÁGINA Y CONTACTO (Estética Factura)
+  // 5. PIE DE PÁGINA Y CONTACTO
   // -----------------------------------------------------
   const FOOTER_Y = 260 
 
@@ -316,7 +312,7 @@ export function generateInventoryReport(products: Product[], businessInfo: Busin
 
 
 // ==============================================
-// 📗 2. FACTURA EN PDF (CARTA PROFESIONAL) - MANTENIDA
+// 📗 2. NOTA DE ENTREGA EN PDF (SIN IVA)
 // ==============================================
 export function generateInvoice(
   businessInfo: BusinessInfo, 
@@ -326,17 +322,9 @@ export function generateInvoice(
   const safeRate = safeBCV(sale.bcvRate)
   const items: SaleItem[] = (sale as any).cart || (sale as any).items || [] 
 
-  // 🔑 CORRECCIÓN: CALCULO INVERSO PARA DESGLOSAR EL IVA
-  // sale.totalUsd es el Gran Total (con IVA)
-  const grandTotalUsd = sale.totalUsd; 
-  const grandTotalBs = sale.totalBs;
-  
-  // 1. Calcular la Base Imponible (Subtotal antes de impuestos)
-  const preTaxSubtotalUsd = grandTotalUsd / (1 + IVA_RATE); 
-  
-  // 2. Calcular el Monto del Impuesto (IVA) por diferencia
-  const ivaUsdCalculated = grandTotalUsd - preTaxSubtotalUsd;
-
+  // Asumimos que sale.totalUsd y sale.totalBs son los TOTALES NETOS (sin IVA)
+  const finalTotalUsd = sale.totalUsd; 
+  const finalTotalBs = sale.totalBs;
   
   const doc = new jsPDF({ format: "letter", unit: "mm" })
   
@@ -383,22 +371,28 @@ export function generateInvoice(
   doc.setTextColor(...HEADER_DARK)
   doc.text((businessInfo.businessName || "").toUpperCase(), MARGIN_LEFT + 22, MARGIN_TOP + 5)
   
-  // C. RIF
+  // C. RIF, Dirección y Contacto (RESTITUIDOS)
   doc.setFont("helvetica", "normal")
   doc.setFontSize(9)
   doc.text(`RIF: ${businessInfo.fiscalDocument || "N/A"}`, MARGIN_LEFT + 22, MARGIN_TOP + 10)
+  doc.text(`Dirección: ${businessInfo.fiscalAddress || "N/A"}`, MARGIN_LEFT + 22, MARGIN_TOP + 15)
+  doc.text(`Teléfono: ${businessInfo.phoneNumber || "N/A"}`, MARGIN_LEFT + 22, MARGIN_TOP + 20)
 
 
   // -----------------------------------------------------
-  // 2. BLOQUE FACTURA (DERECHA)
+  // 2. BLOQUE NOTA DE ENTREGA (DERECHA) - CENTRADO
   // -----------------------------------------------------
   doc.setFillColor(...HEADER_DARK)
   doc.rect(INVOICE_BLOCK_X - 10, 0, INVOICE_BLOCK_WIDTH + 10, 30, "F") 
 
+  // Calcular el centro del bloque
+  const INVOICE_BLOCK_CENTER_X = INVOICE_BLOCK_X - 10 + (INVOICE_BLOCK_WIDTH + 10) / 2
+
   doc.setFont("helvetica", "bold")
-  doc.setFontSize(24)
+  doc.setFontSize(20) 
   doc.setTextColor(255) 
-  doc.text("FACTURA", INVOICE_BLOCK_X + 10, MARGIN_TOP + 10)
+  // CENTRADO APLICADO
+  doc.text("NOTA DE ENTREGA", INVOICE_BLOCK_CENTER_X, MARGIN_TOP + 10, { align: 'center' })
 
   // -----------------------------------------------------
   // 3. INFORMACIÓN DE CLIENTE Y FACTURA
@@ -429,7 +423,7 @@ export function generateInvoice(
   doc.setFont("helvetica", "bold")
   doc.setFontSize(11)
   doc.setTextColor(...CARD_TEXT)
-  doc.text("No. Factura:", INVOICE_BLOCK_X, INFO_Y_START)
+  doc.text("No. Nota:", INVOICE_BLOCK_X, INFO_Y_START)
   doc.text("Fecha:", INVOICE_BLOCK_X, INFO_Y_START + LINE_HEIGHT)
   doc.text("Tasa BCV:", INVOICE_BLOCK_X, INFO_Y_START + LINE_HEIGHT * 2)
 
@@ -446,6 +440,8 @@ export function generateInvoice(
   const TABLE_START_Y = INFO_Y_START + LINE_HEIGHT * 6 
 
   const tableData = items.map((item, index) => { 
+    // Si el precio de venta viene de la base de datos ya redondeado, no se aplica de nuevo.
+    // Si la función calculateSalePrice estuviera aquí, ya lo haría.
     const priceUsdFinal = item.priceUsd; 
     const totalLineUsd = item.quantity * priceUsdFinal; 
 
@@ -490,7 +486,7 @@ export function generateInvoice(
   let currentY = finalY;
 
   // -----------------------------------------------------
-  // 5. TOTALES (ESQUINA INFERIOR DERECHA) - CORREGIDO
+  // 5. TOTALES (ESQUINA INFERIOR DERECHA) - IVA ELIMINADO
   // -----------------------------------------------------
   const TOTAL_BLOCK_X = 145; 
   const TOTAL_BLOCK_WIDTH = 60;
@@ -500,25 +496,25 @@ export function generateInvoice(
   doc.setFont("helvetica", "normal")
   doc.setFontSize(10)
 
-  // Subtotal USD (Base Imponible)
+  // Subtotal USD (Base) - Monto de las líneas antes de descuento
   doc.setFillColor(...LIGHT_ROW)
   doc.rect(TOTAL_BLOCK_X - 10, currentY, TOTAL_BLOCK_WIDTH, TOTAL_ROW_HEIGHT, "F")
   doc.setTextColor(...CARD_TEXT)
-  doc.text("SUBTOTAL USD:", TOTAL_BLOCK_X, currentY + 4) 
-  // Usar el Subtotal antes de IVA
-  doc.text(`$${preTaxSubtotalUsd.toFixed(2)}`, TOTAL_VALUE_X, currentY + 4, { align: "right" })
+  doc.text("SUBTOTAL:", TOTAL_BLOCK_X, currentY + 4) 
+  // Usamos subtotalUsd pasado (total de lineas)
+  doc.text(`$${(sale.subtotalUsd || 0).toFixed(2)}`, TOTAL_VALUE_X, currentY + 4, { align: "right" })
   currentY += TOTAL_ROW_HEIGHT;
 
-  // Impuestos (16%)
+  // Descuento USD
   doc.setFillColor(...LIGHT_ROW)
   doc.rect(TOTAL_BLOCK_X - 10, currentY, TOTAL_BLOCK_WIDTH, TOTAL_ROW_HEIGHT, "F")
-  doc.setTextColor(...CARD_TEXT)
-  doc.text(`IMPUESTO (${(IVA_RATE * 100).toFixed(0)}%):`, TOTAL_BLOCK_X, currentY + 4)
-  // Usar el IVA calculado
-  doc.text(`$${ivaUsdCalculated.toFixed(2)}`, TOTAL_VALUE_X, currentY + 4, { align: "right" })
+  doc.setTextColor(255, 0, 0) // Color rojo para el descuento
+  doc.text("DESCUENTO:", TOTAL_BLOCK_X, currentY + 4)
+  // Usamos discountUsd pasado
+  doc.text(`-$${(sale.discountUsd || 0).toFixed(2)}`, TOTAL_VALUE_X, currentY + 4, { align: "right" })
   currentY += TOTAL_ROW_HEIGHT;
 
-  // TOTAL USD (Gran Total)
+  // TOTAL USD (Gran Total NETO)
   const TOTAL_USD_HEIGHT = TOTAL_ROW_HEIGHT * 1.2; 
   const TEXT_Y_TOTAL_USD = 5; 
   
@@ -528,11 +524,11 @@ export function generateInvoice(
   doc.setFontSize(12)
   doc.setTextColor(255) 
   doc.text("TOTAL USD:", TOTAL_BLOCK_X, currentY + TEXT_Y_TOTAL_USD)
-  // Usar el Gran Total original
-  doc.text(`$${grandTotalUsd.toFixed(2)}`, TOTAL_VALUE_X, currentY + TEXT_Y_TOTAL_USD, { align: "right" })
+  // Usamos totalUsd pasado (neto)
+  doc.text(`$${finalTotalUsd.toFixed(2)}`, TOTAL_VALUE_X, currentY + TEXT_Y_TOTAL_USD, { align: "right" })
   currentY += TOTAL_USD_HEIGHT;
   
-  // Total BS (Gran Total)
+  // Total BS (Gran Total NETO)
   const BS_OFFSET_START = 5; 
   currentY += BS_OFFSET_START; 
   
@@ -543,8 +539,8 @@ export function generateInvoice(
   currentY += 8; 
   
   doc.setFontSize(18)
-  // Usar el Gran Total en Bolívares original
-  doc.text(`Bs ${formatBs(grandTotalBs)}`, TOTAL_VALUE_X, currentY, { align: "right" }) 
+  // Usamos totalBs pasado (neto)
+  doc.text(`Bs ${formatBs(finalTotalBs)}`, TOTAL_VALUE_X, currentY, { align: "right" }) 
   doc.setTextColor(0)
   
   
@@ -574,46 +570,43 @@ export function generateInvoice(
 
 
   // -----------------------------------------------------
-  // 7. PIE DE PÁGINA Y CONTACTO
+  // 7. PIE DE PÁGINA Y FIRMA
   // -----------------------------------------------------
+  
+  // Nueva posición fija para la firma (aprox 250mm)
+  const SIGNATURE_LINE_Y = 250; 
+  const SIGNATURE_TEXT_Y = SIGNATURE_LINE_Y + 4; // 4mm debajo de la línea
+  const SIGNATURE_X_CENTER = 155; // Centrado en la derecha
+  
+  // 1. Línea de firma
+  doc.setDrawColor(0)
+  doc.line(130, SIGNATURE_LINE_Y, 180, SIGNATURE_LINE_Y) 
+  
+  // 2. Texto de firma
+  doc.setFontSize(8)
+  doc.setFont("helvetica", "normal")
+  doc.setTextColor(0)
+  doc.text("Firma Autorizada", SIGNATURE_X_CENTER, SIGNATURE_TEXT_Y, { align: 'center' })
+
+  // 3. Línea divisoria de pie de página (260mm)
   const FOOTER_Y = 260 
 
   doc.setLineWidth(0.1)
   doc.setDrawColor(200)
   doc.line(MARGIN_LEFT, FOOTER_Y, 216 - MARGIN_LEFT, FOOTER_Y) 
 
-  doc.setFontSize(8)
-  doc.setFont("helvetica", "normal")
-  doc.setTextColor(...CARD_TEXT)
-
-  const contactInfo = [
-    { label: "Dirección:", value: businessInfo.fiscalAddress },
-    { label: "Teléfono:", value: businessInfo.phoneNumber },
-    { label: "Email:", value: businessInfo.email },
-  ];
-  
-  contactInfo.forEach((item, index) => {
-    const xPos = MARGIN_LEFT + index * 60; 
-    
-    doc.setFont("helvetica", "bold")
-    doc.text(item.label, xPos, FOOTER_Y + 5)
-    
-    doc.setFont("helvetica", "normal")
-    doc.text(item.value || "N/A", xPos, FOOTER_Y + 9)
-  })
-
-  // Firma Autorizada
-  doc.setFont("helvetica", "normal")
-  doc.text("Firma Autorizada", 155, FOOTER_Y + 12, { align: 'center' })
-  doc.setDrawColor(0)
-  doc.line(130, FOOTER_Y + 11, 180, FOOTER_Y + 11) 
+  // 4. DOCUMENTO NO FISCAL (Mantener cerca del borde inferior)
+  doc.setFontSize(7)
+  doc.setFont("helvetica", "italic")
+  doc.setTextColor(150)
+  doc.text("DOCUMENTO NO FISCAL", 216 - 14, FOOTER_Y + 12, { align: 'right' })
 
   doc.output('dataurlnewwindow');
 }
 
 
 // ==============================================
-// 📘 3. ETIQUETAS DE PRODUCTOS (CARTA – LANDSCAPE) - MANTENIDA
+// 📘 3. ETIQUETAS DE PRODUCTOS (CARTA – LANDSCAPE) - AJUSTE DE TAMAÑO DE FUENTE
 // ==============================================
 export function generateProductLabels(products: Product[], bcvRate: number) {
   const safeRate = safeBCV(bcvRate)
@@ -638,11 +631,9 @@ export function generateProductLabels(products: Product[], bcvRate: number) {
 
   productsWithBarcode.forEach((p, i) => {
     
-    const salePrice = calculateSalePrice(p)
-    // 1. Calcular el precio final (con IVA incluido)
-    // Precio Final = Precio Base * (1 + IVA_RATE)
-    const finalPriceUsd = salePrice * (1 + IVA_RATE)
-    const finalPriceBs = finalPriceUsd * safeRate
+    // El precio de venta ahora es directamente el precio neto (sin IVA)
+    const salePriceUsd = calculateSalePrice(p)
+    const salePriceBs = salePriceUsd * safeRate
 
 
     const row = Math.floor(i / labelsPerRow) % labelsPerColumn
@@ -668,49 +659,52 @@ export function generateProductLabels(products: Product[], bcvRate: number) {
     doc.setLineWidth(0.5)
     doc.line(x + 3, y + 5.5, x + labelWidth - 3, y + 5.5)
 
-    // 2. Nombre del producto 
+    // -----------------------------------------------------------------
+    // 2. Nombre del producto (MÁS GRANDE) - IZQUIERDA
+    // -----------------------------------------------------------------
     doc.setFont("helvetica", "bold")
-    let fontSize = 16 
+    let fontSize = 24 
     const maxWidth = labelWidth - 6 
-    while (doc.getTextWidth(p.name.toUpperCase()) > maxWidth && fontSize > 10) {
+    
+    // Reducir font size hasta que quepa en el ancho disponible
+    while (doc.getTextWidth(p.name.toUpperCase()) > maxWidth && fontSize > 14) {
       fontSize -= 0.5
       doc.setFontSize(fontSize)
     }
+    
     doc.setTextColor(0) 
-    doc.text(p.name.toUpperCase(), x + 3, y + 12) 
+    // POSICIÓN AJUSTADA: Movemos ligeramente hacia abajo.
+    doc.text(p.name.toUpperCase(), x + 3, y + 15) 
 
-    // 3. Precio en Bs (con IVA)
-    doc.setFontSize(8)
+    // -----------------------------------------------------------------
+    // 3. Precio en Bs (Mediano) - IZQUIERDA, debajo del nombre
+    // -----------------------------------------------------------------
+    doc.setFontSize(10) 
     doc.setFont("helvetica", "normal")
     doc.setTextColor(...CARD_TEXT) 
     
-    doc.text(`PRECIO BS (IVA Incluido): ${formatBs(finalPriceBs)}`, x + 3, y + 17) 
+    // POSICIÓN AJUSTADA: Movemos debajo del nombre.
+    doc.text(`PRECIO BS: ${formatBs(salePriceBs)}`, x + 3, y + 22) 
 
-
-    // --- SECCIÓN MEDIA: PRECIO USD (EL MÁS GRANDE Y CON COLOR) ---
-    const USD_Y_START = 22; 
+    // -----------------------------------------------------------------
+    // 4. Precio en USD (EL MÁS GRANDE Y CON COLOR) - DERECHA
+    // -----------------------------------------------------------------
     
     doc.setFontSize(28) 
     doc.setFont("helvetica", "bold")
     doc.setTextColor(...PRIMARY_COLOR) 
     
-    // Precio Final en USD (con IVA)
-    doc.text(`$${finalPriceUsd.toFixed(2)}`, x + labelWidth - 3, y + USD_Y_START + 8, { align: "right" })
-
-    // Indicador de IVA Incluido
-    doc.setFontSize(7) 
-    doc.setFont("helvetica", "normal")
-    doc.setTextColor(...CARD_TEXT) 
-    doc.text("IVA INCLUIDO", x + labelWidth - 3, y + USD_Y_START + 12, { align: "right" })
-
+    // Precio en USD (Neto), posicionado a la DERECHA
+    // POSICIÓN AJUSTADA: Movemos ligeramente hacia abajo para compensar los textos superiores.
+    doc.text(`$${salePriceUsd.toFixed(2)}`, x + labelWidth - 3, y + 35, { align: "right" })
 
     // --- SECCIÓN INFERIOR: CÓDIGO DE BARRAS ---
     
     const BARCODE_HEIGHT_MM = 8; 
     const BARCODE_WIDTH_MM = labelWidth - 8; 
     
-    const BARCODE_Y_START = y + labelHeight - BARCODE_HEIGHT_MM - 6; 
-    const BARCODE_TEXT_Y = BARCODE_Y_START + BARCODE_HEIGHT_MM + 2.5; 
+    const BARCODE_Y_START = y + labelHeight - BARCODE_HEIGHT_MM - 6; // Y + 36
+    const BARCODE_TEXT_Y = BARCODE_Y_START + BARCODE_HEIGHT_MM + 2.5; // Y + 46.5
 
     if (p.barcode) {
         const barcodeDataURL = generateBarcodeDataURL(p.barcode, 400, 70); 

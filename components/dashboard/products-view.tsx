@@ -24,6 +24,8 @@ interface Product {
   profit: number
   saleType: "unit" | "weight"
   barcode?: string
+  // 🟢 NUEVO: Precio de venta manual en USD guardado en DB
+  salePriceUsdManual?: number 
 }
 
 // Interfaz simplificada
@@ -35,12 +37,9 @@ interface FormData {
   profit: string
   saleType: "unit" | "weight"
   barcode: string
+  // 🟢 NUEVO: Campo de entrada para precio manual
+  salePriceUsdManual: string
 }
-
-// ===============================================
-// 🎯 CONSTANTE DE IVA
-// ===============================================
-const IVA_RATE = 0.16; // 16% de IVA
 
 // ===============================================
 // 🎯 FUNCIÓN DE CÁLCULO 1: Precio Base (Sin IVA)
@@ -61,19 +60,6 @@ const calculateBaseSalePrice = (product: Product): number => {
 
     // 4. Devolvemos el precio válido o 0 si el resultado es infinito/inválido.
     return Number.isFinite(baseSalePrice) ? baseSalePrice : 0;
-}
-
-// ===============================================
-// 🎯 FUNCIÓN DE CÁLCULO 2: Precio Final (Con IVA)
-// (Esta reemplaza a la función original)
-// ===============================================
-
-const calculateFinalSalePrice = (basePrice: number): number => {
-    // Precio Final = Precio Base * (1 + IVA_RATE)
-    const finalPrice = basePrice * (1 + IVA_RATE);
-
-    // 4. Devolvemos el precio válido o 0.
-    return Number.isFinite(finalPrice) ? finalPrice : 0;
 }
 
 // ===============================================
@@ -98,6 +84,8 @@ export default function ProductsView() {
     profit: "",
     saleType: "unit",
     barcode: "",
+    // 🟢 NUEVO: Inicialización del campo
+    salePriceUsdManual: "", 
   })
 
   // 🚀 Inicialización
@@ -163,25 +151,40 @@ export default function ProductsView() {
 
   // ----------------------------------------------------
   // LÓGICA: CÁLCULO DE PRECIOS PARA LA VISTA PREVIA DEL FORMULARIO
-  // (ACTUALIZADA con Precio Base y Precio Final con IVA)
+  // (ACTUALIZADA: Implementando Precio Manual o Descuento 30% y REDONDEO)
   // ----------------------------------------------------
   const currentCostUsd = Number.parseFloat(formData.costUsd || "0");
   const currentProfit = Number.parseFloat(formData.profit || "0");
+  const manualSalePrice = Number.parseFloat(formData.salePriceUsdManual);
 
   let profitDecimal = currentProfit > 1 ? currentProfit / 100 : currentProfit;
   if (isNaN(profitDecimal) || profitDecimal < 0 || profitDecimal >= 1) {
       profitDecimal = 0; 
   }
 
-  // Paso 1: Precio de Venta Base (Sin IVA)
-  const previewSalePriceBaseUsd = currentCostUsd / (1 - profitDecimal);
-  const finalSalePriceBaseUsd = Number.isFinite(previewSalePriceBaseUsd) ? previewSalePriceBaseUsd : 0;
+  // Paso 1: Precio de Venta Base Calculado (Sin IVA, sin redondeo)
+  const calculatedBasePriceUsd = currentCostUsd / (1 - profitDecimal);
+  const basePriceUsd = Number.isFinite(calculatedBasePriceUsd) ? calculatedBasePriceUsd : 0;
   
-  // Paso 2: Precio de Venta Final (Con IVA)
-  const finalSalePriceUsd = calculateFinalSalePrice(finalSalePriceBaseUsd);
-  const finalSalePriceBs = finalSalePriceUsd * bcvRate;
-  // ----------------------------------------------------
+  // Paso 2: Precio de Venta Final USD (Aplicando lógica y redondeo)
+  let finalSalePriceUsd = basePriceUsd; // Inicialmente sin redondear
+  
+  // 🟢 LÓGICA DEL PRECIO EN DIVISAS: Si el campo manual NO está vacío y es un número válido
+  if (formData.salePriceUsdManual.trim() && !isNaN(manualSalePrice) && manualSalePrice > 0) {
+      finalSalePriceUsd = manualSalePrice;
+  } 
+  // 🟢 LÓGICA DEL DESCUENTO: Si el campo manual SÍ está vacío, aplicamos la fórmula de descuento 30%
+  else if (!formData.salePriceUsdManual.trim() && basePriceUsd > 0) {
+      // Precio Final = Precio Base - (Precio Base * 0.3)
+      finalSalePriceUsd = basePriceUsd * (1 - 0.3); // 1 - (1 * 0.3) = 0.7
+  }
 
+  // 🚨 CORRECCIÓN: Aplicar Math.round() SOLO al precio final para guardar y mostrar.
+  const roundedFinalSalePriceUsd = Math.round(finalSalePriceUsd);
+  
+  // Paso 3: Precio de Venta Final en Bs (usando el precio USD redondeado)
+  const finalSalePriceBs = roundedFinalSalePriceUsd * bcvRate;
+  // ----------------------------------------------------
 
   // 💾 Guardar producto
   const handleAddProduct = async (e: FormEvent<HTMLFormElement>) => {
@@ -191,6 +194,16 @@ export default function ProductsView() {
     try {
       const costUsd = Number.parseFloat(formData.costUsd)
       const quantity = Number.parseInt(formData.quantity)
+      
+      // 🟢 OBTENER EL PRECIO MANUAL DE VENTA PARA GUARDARLO
+      let salePriceUsdManualToSave: number | undefined = undefined;
+      const manualPrice = Number.parseFloat(formData.salePriceUsdManual);
+      
+      // Si el usuario ingresó un precio manual, lo guardamos redondeado.
+      if (formData.salePriceUsdManual.trim() && !isNaN(manualPrice) && manualPrice > 0) {
+        salePriceUsdManualToSave = Math.round(manualPrice);
+      }
+
 
       const productData = {
         userId: user.uid,
@@ -201,6 +214,8 @@ export default function ProductsView() {
         profit: Number.parseFloat(formData.profit),
         saleType: formData.saleType,
         barcode: formData.barcode.trim(),
+        // 🟢 NUEVO: Guardar el precio manual si existe (ya redondeado)
+        salePriceUsdManual: salePriceUsdManualToSave, 
         createdAt: Timestamp.now(),
       }
 
@@ -229,6 +244,8 @@ export default function ProductsView() {
       profit: "",
       saleType: "unit",
       barcode: "",
+      // 🟢 NUEVO: Resetear campo manual
+      salePriceUsdManual: "", 
     })
   }
 
@@ -242,6 +259,8 @@ export default function ProductsView() {
       profit: product.profit.toString(),
       saleType: product.saleType,
       barcode: product.barcode || "",
+      // 🟢 NUEVO: Cargar el precio manual al editar
+      salePriceUsdManual: product.salePriceUsdManual?.toString() || "", 
     })
     setEditingId(product.id)
     setShowForm(true)
@@ -395,9 +414,20 @@ export default function ProductsView() {
                   <option value="weight">Por Peso (Kg)</option>
                   {/* ELIMINADO: Por Área (m²) */}
                 </select>
+                
+                {/* 🟢 NUEVO CAMPO: Precio de Venta Manual en Divisas */}
+                <Input
+                  type="number"
+                  placeholder="Precio Venta Manual USD (Opcional)"
+                  step="1" // Cambiado a step 1 para reflejar que se guarda el entero
+                  value={formData.salePriceUsdManual}
+                  onChange={(e) => setFormData({ ...formData, salePriceUsdManual: e.target.value })}
+                  className="h-10 sm:col-span-2"
+                />
+                
               </div>
 
-              {/* ⭐️ SECCIÓN CORREGIDA: VISTA PREVIA DEL PRECIO FINAL (Apto para Dark Mode) */}
+              {/* ⭐️ SECCIÓN ACTUALIZADA: VISTA PREVIA DEL PRECIO FINAL (Ahora incluye lógica manual/descuento/redondeo) */}
               {currentCostUsd > 0 && (
                 <div className="
                   bg-blue-50/70 dark:bg-blue-900/30 
@@ -407,17 +437,31 @@ export default function ProductsView() {
                 ">
                   <h4 className="font-semibold text-blue-800 dark:text-blue-300">Precios Calculados (Vista Previa)</h4>
                   
-                  {/* Precio de Venta Base (Sin IVA) */}
+                  {/* Muestra el Precio Base Calculado (sin redondeo) */}
                   <div className="flex justify-between">
-                      <span className="text-sm text-foreground/70">Precio Venta Base USD (Sin IVA):</span>
-                      <span className="font-bold text-base text-blue-800 dark:text-blue-300">${finalSalePriceBaseUsd.toFixed(2)}</span>
+                      <span className="text-sm text-foreground/70">Precio Base Calculado (sin descuento):</span>
+                      <span className="font-bold text-base text-blue-800 dark:text-blue-300">${basePriceUsd.toFixed(2)}</span>
                   </div>
                   
-                  {/* Precio de Venta Final (Con IVA) */}
+                  {/* Muestra el Precio Final Aplicado (Manual o con Descuento, REDONDEADO) */}
                   <div className="flex justify-between">
-                      <span className="text-sm text-foreground/70">Precio Venta FINAL USD (IVA 16%):</span>
-                      <span className="font-bold text-base text-purple-600 dark:text-purple-400">${finalSalePriceUsd.toFixed(2)}</span>
+                      <span className="text-sm text-foreground/70">Precio Venta FINAL USD (Redondeado):</span>
+                      <span className="font-bold text-base text-purple-600 dark:text-purple-400">
+                        ${roundedFinalSalePriceUsd.toFixed(0)}
+                      </span>
                   </div>
+                  
+                  {/* Indica si se aplicó el descuento o el precio manual */}
+                  {formData.salePriceUsdManual.trim() ? (
+                    <p className="text-xs text-orange-600 dark:text-orange-400">
+                        Se está usando el precio USD ingresado manualmente (redondeado al entero ${roundedFinalSalePriceUsd.toFixed(0)}).
+                    </p>
+                  ) : basePriceUsd > 0 ? (
+                    <p className="text-xs text-red-600 dark:text-red-400">
+                        Precio final USD ajustado con descuento del 30% (Redondeado al entero ${roundedFinalSalePriceUsd.toFixed(0)}).
+                    </p>
+                  ) : null}
+
                   
                   <div className="flex justify-between">
                       <span className="text-sm text-foreground/70">
@@ -430,7 +474,7 @@ export default function ProductsView() {
                   </p>
                 </div>
               )}
-              {/* FIN DE LA SECCIÓN CORREGIDA */}
+              {/* FIN DE LA SECCIÓN ACTUALIZADA */}
 
               <div className="flex flex-col sm:flex-row gap-2">
                 <Button type="submit" className="bg-primary hover:bg-primary/90 h-10">
@@ -482,12 +526,15 @@ export default function ProductsView() {
                   <tr className="border-b border-border">
                     <th className="text-left py-3 px-4">Producto</th>
                     <th className="text-left py-3 px-4">Categoría</th>
-                    <th className="text-right py-3 px-4">Costo Unidad USD</th>
-                    {/* NUEVO: Precio Venta Base (Sin IVA) */}
-                    <th className="text-right py-3 px-4">Precio Venta USD (Sin IVA)</th>
-                    {/* MODIFICADO: Precio Venta Final (Con IVA) */}
-                    <th className="text-right py-3 px-4">Precio Venta USD (IVA 16%)</th>
-                    <th className="text-right py-3 px-4">Precio Venta Bs (IVA 16%)</th>
+                    <th className="text-right py-3 px-4">Costo USD</th>
+                    
+                    {/* 🟢 NUEVA COLUMNA: Precio Base Calculado (sin redondeo) */}
+                    <th className="text-right py-3 px-4">Precio Base USD (BCV)</th> 
+                    
+                    {/* 🟢 MODIFICADO: Ahora muestra el precio de venta aplicado (redondeado) */}
+                    <th className="text-right py-3 px-4">Precio Venta FINAL USD</th> 
+                    
+                    <th className="text-right py-3 px-4">Precio Venta Bs</th>
                     <th className="text-right py-3 px-4">Unidades Disponibles</th>
                     <th className="text-left py-3 px-4">Tipo</th>
                     <th className="text-center py-3 px-4">Acciones</th>
@@ -495,19 +542,40 @@ export default function ProductsView() {
                 </thead>
                 <tbody>
                   {filteredProducts.map((product) => {
-                    // CÁLCULOS ACTUALIZADOS
-                    const basePrice = calculateBaseSalePrice(product)
-                    const finalSalePrice = calculateFinalSalePrice(basePrice)
-                    const finalSalePriceBs = finalSalePrice * bcvRate
+                    // CÁLCULOS ACTUALIZADOS (Implementando Precio Manual o Descuento 30%)
+                    const basePrice = calculateBaseSalePrice(product);
+                    let finalSalePriceUsd = basePrice;
+                    
+                    // Si hay un precio manual guardado, se usa ese precio (ya está redondeado en DB).
+                    if (product.salePriceUsdManual && product.salePriceUsdManual > 0) {
+                      finalSalePriceUsd = product.salePriceUsdManual;
+                    } 
+                    // Si no hay precio manual, aplica el descuento del 30% al precio base.
+                    else if (basePrice > 0) {
+                      finalSalePriceUsd = basePrice * (1 - 0.3);
+                    }
+                    
+                    // 🚨 CORRECCIÓN: Aplicar Math.round() SOLO si no viene de DB (para asegurar consistencia si el valor base tiene decimales)
+                    // Si viene de DB (product.salePriceUsdManual) ya fue guardado redondeado.
+                    if (!product.salePriceUsdManual || product.salePriceUsdManual <= 0) {
+                        finalSalePriceUsd = Math.round(finalSalePriceUsd);
+                    }
+                    
+                    const finalSalePriceBs = finalSalePriceUsd * bcvRate;
+                    
                     return (
                       <tr key={product.id} className="border-b border-border hover:bg-muted/50">
                         <td className="py-3 px-4 font-medium">{product.name}</td>
                         <td className="py-3 px-4">{product.category}</td>
                         <td className="text-right py-3 px-4">${product.costUsd.toFixed(2)}</td>
-                        {/* NUEVO: Precio Venta Base (Sin IVA) */}
-                        <td className="text-right py-3 px-4">${basePrice.toFixed(2)}</td>
-                        {/* MODIFICADO: Precio Venta Final (Con IVA) */}
-                        <td className="text-right py-3 px-4 font-semibold text-purple-600 dark:text-purple-400">${finalSalePrice.toFixed(2)}</td>
+                        
+                        {/* 🟢 NUEVA CELDA: Precio Base USD (sin redondeo) */}
+                        <td className="text-right py-3 px-4 text-muted-foreground">${basePrice.toFixed(2)}</td>
+                        
+                        {/* 🟢 Precio de Venta FINAL USD (Manual o con Descuento, REDONDEADO) */}
+                        <td className="text-right py-3 px-4 font-semibold text-purple-600 dark:text-purple-400">${finalSalePriceUsd.toFixed(0)}</td>
+                        
+                        {/* Precio de Venta en Bs */}
                         <td className="text-right py-3 px-4 font-semibold text-primary">Bs {finalSalePriceBs.toFixed(2)}</td>
                         <td className="text-right py-3 px-4">{product.quantity}</td>
                         <td className="py-3 px-4 capitalize">{product.saleType}</td>
@@ -545,10 +613,23 @@ export default function ProductsView() {
         ) : (
           <div className="space-y-3">
             {filteredProducts.map((product) => {
-              // CÁLCULOS ACTUALIZADOS
-              const basePrice = calculateBaseSalePrice(product)
-              const finalSalePrice = calculateFinalSalePrice(basePrice)
-              const finalSalePriceBs = finalSalePrice * bcvRate
+              // CÁLCULOS ACTUALIZADOS (Implementando Precio Manual o Descuento 30%)
+              const basePrice = calculateBaseSalePrice(product);
+              let finalSalePriceUsd = basePrice;
+              
+              if (product.salePriceUsdManual && product.salePriceUsdManual > 0) {
+                finalSalePriceUsd = product.salePriceUsdManual;
+              } else if (basePrice > 0) {
+                finalSalePriceUsd = basePrice * (1 - 0.3);
+              }
+              
+              // 🚨 CORRECCIÓN: Aplicar Math.round() SOLO si no viene de DB (para asegurar consistencia si el valor base tiene decimales)
+              if (!product.salePriceUsdManual || product.salePriceUsdManual <= 0) {
+                  finalSalePriceUsd = Math.round(finalSalePriceUsd);
+              }
+              
+              const finalSalePriceBs = finalSalePriceUsd * bcvRate;
+              
               return (
                 <Card key={product.id} className="border-l-4 border-l-primary">
                   <CardContent className="pt-4 space-y-3">
@@ -563,21 +644,21 @@ export default function ProductsView() {
                         <p className="font-medium">${product.costUsd.toFixed(2)}</p>
                       </div>
                       
-                      {/* NUEVO: Precio Base sin IVA */}
+                      {/* 🟢 Precio Base USD */}
                       <div>
-                        <p className="text-muted-foreground text-xs">Venta USD (Sin IVA)</p>
-                        <p className="font-medium">${basePrice.toFixed(2)}</p>
+                        <p className="text-muted-foreground text-xs">Precio Base USD (BCV)</p>
+                        <p className="font-medium text-muted-foreground">${basePrice.toFixed(2)}</p>
+                      </div>
+                      
+                      {/* 🟢 Precio de Venta FINAL USD (Manual o con Descuento, REDONDEADO) */}
+                      <div>
+                        <p className="text-muted-foreground text-xs">Venta FINAL USD</p>
+                        <p className="font-semibold text-purple-600 dark:text-purple-400">${finalSalePriceUsd.toFixed(0)}</p>
                       </div>
 
-                      {/* MODIFICADO: Precio Final con IVA */}
+                      {/* Precio de Venta en Bs */}
                       <div>
-                        <p className="text-muted-foreground text-xs">Venta USD (IVA 16%)</p>
-                        <p className="font-semibold text-purple-600 dark:text-purple-400">${finalSalePrice.toFixed(2)}</p>
-                      </div>
-
-                      {/* MODIFICADO: Precio Final en Bs */}
-                      <div>
-                        <p className="text-muted-foreground text-xs">Venta Bs (IVA 16%)</p>
+                        <p className="text-muted-foreground text-xs">Venta Bs</p>
                         <p className="font-semibold text-primary">Bs {finalSalePriceBs.toFixed(2)}</p>
                       </div>
                       
@@ -586,6 +667,14 @@ export default function ProductsView() {
                         <p className="font-medium">{product.quantity}</p>
                       </div>
                     </div>
+                    
+                    {/* Indicador de Precio Manual o Descuento */}
+                    {product.salePriceUsdManual && product.salePriceUsdManual > 0 ? (
+                        <p className="text-xs text-orange-600 dark:text-orange-400">Precio USD manual aplicado.</p>
+                    ) : (
+                        <p className="text-xs text-red-600 dark:text-red-400">Descuento 30% aplicado.</p>
+                    )}
+
 
                     <div className="flex gap-2 text-xs">
                       <span className="px-2 py-1 bg-muted rounded capitalize">{product.saleType}</span>
