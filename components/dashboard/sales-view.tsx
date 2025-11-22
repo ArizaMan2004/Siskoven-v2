@@ -8,7 +8,7 @@ import { collection, query, where, getDocs, addDoc, updateDoc, doc, Timestamp } 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Trash2, Plus, Minus, Scan, ShoppingCart, Search, UserSearch } from "lucide-react"
+import { Trash2, Plus, Minus, Scan, ShoppingCart, Search, UserSearch, X } from "lucide-react" 
 import { initBarcodeScanner } from "@/lib/barcode-scanner"
 import { getBCVRate } from "@/lib/bcv-service" 
 
@@ -49,7 +49,18 @@ interface CartItem {
   kg?: number 
 }
 
-type PaymentMethod = "debit" | "cash" | "transfer" | "mixed" | "pagoMovil" | "zelle" | "binance" | "biopago" // AGREGADO: biopago
+type SinglePaymentMethod = "cash" | "zelle" | "binance" | "debit" | "transfer" | "pagoMovil" | "biopago";
+type PaymentMethod = SinglePaymentMethod | "mixed" 
+
+// 🔑 NUEVAS INTERFACES PARA DESGLOSE DE PAGO MIXTO
+interface PaymentLine {
+    id: number;
+    method: SinglePaymentMethod; // e.g., 'cash', 'biopago'
+    currency: 'USD' | 'BS';
+    amount: number; // Monto en la moneda del pago (USD o BS)
+    amountBsEquivalent: number; // Monto convertido a Bs (para el cálculo de cobertura)
+}
+type BreakdownMethod = SinglePaymentMethod; // Alias para claridad
 
 // ==============================================
 // 🛑 Componente Principal
@@ -67,9 +78,13 @@ export default function SalesView() {
   const [searchTerm, setSearchTerm] = useState("")
 
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash")
-  const [mixedUsd, setMixedUsd] = useState<string>("")
   const [discountPercentage, setDiscountPercentage] = useState(0)
   
+  // 🔑 NUEVOS ESTADOS PARA DESGLOSE DE PAGOS MIXTOS (UNIFICADO)
+  const [paymentBreakdown, setPaymentBreakdown] = useState<PaymentLine[]>([])
+  const [newPaymentMethod, setNewPaymentMethod] = useState<BreakdownMethod>("cash")
+  const [newPaymentAmount, setNewPaymentAmount] = useState("")
+
   // 🔑 ESTADOS PARA DATOS DEL CLIENTE
   const [clientDocumentPrefix, setClientDocumentPrefix] = useState<string>("V")
   const [clientDocumentNumber, setClientDocumentNumber] = useState("") 
@@ -126,6 +141,7 @@ export default function SalesView() {
     
     const fetchBcvRate = async () => {
       try {
+        // Asumiendo que getBCVRate() devuelve un objeto con la tasa actualizada
         const bcvData = getBCVRate() 
         const rate = Number(bcvData.rate)
         if (Number.isFinite(rate) && rate > 0) {
@@ -258,7 +274,7 @@ export default function SalesView() {
     
     // Si el método de pago está en la lista de USD (cash, zelle, binance), usa el precio ajustado.
     // Si no está (débito, transferencia, pago móvil, mixto, biopago), usa el precio completo.
-    const isUsingUsdPrice = USD_PAYMENT_METHODS.includes(paymentMethod);
+    const isUsingUsdPrice = USD_PAYMENT_METHODS.includes(paymentMethod as SinglePaymentMethod);
     
     const priceUsdToUse = isUsingUsdPrice ? adjustedPrice : fullPrice;
 
@@ -274,7 +290,9 @@ export default function SalesView() {
   const safeBcvRate = bcvRate > 0 ? bcvRate : 1 
   
   // 1. Determine la base del precio a usar (ajustado o completo)
-  const isPayingInUsd = USD_PAYMENT_METHODS.includes(paymentMethod);
+  // En modo Mixto o pago en Bs (Débito, etc.), siempre se usa el precio COMPLETO.
+  // Solo se usa el precio ajustado si el método es UN SOLO USD (cash, zelle, binance).
+  const isPayingInUsdDiscounted = USD_PAYMENT_METHODS.includes(paymentMethod as SinglePaymentMethod) && paymentMethod !== "mixed";
   
   // 2. Calcular el Total Base, usando el precio correcto por unidad
   const baseTotalUsd = cart.reduce((sum, itemInCart) => {
@@ -283,11 +301,11 @@ export default function SalesView() {
 
       let unitPriceToUse: number;
 
-      if (isPayingInUsd) {
-          // Si paga en USD: usa el precio ajustado (almacenado en itemInCart.priceUsd)
+      if (isPayingInUsdDiscounted) {
+          // Si paga con UN SOLO método USD: usa el precio ajustado (almacenado en itemInCart.priceUsd)
           unitPriceToUse = itemInCart.priceUsd; 
       } else {
-          // Si paga en Bs (incluyendo Biopago): usa el precio completo sin descuento
+          // Si paga en Bs o Mixto: usa el precio completo sin descuento
           unitPriceToUse = calculateFullBasePrice(product);
       }
       
@@ -312,18 +330,21 @@ export default function SalesView() {
     ? `Descuento Aplicado (${safeDiscount.toFixed(0)}%):` 
     : 'Descuento:'
     
-  // 🔑 LÓGICA DE PAGO MIXTO Y CÁLCULO DE RESTANTE BS
-  const mixedUsdValue = Number.parseFloat(mixedUsd || "0");
-  const usdPortionInBs = mixedUsdValue * safeBcvRate;
-  const remainingBsToPay = totalBs - usdPortionInBs;
-  const safeRemainingBs = Math.max(0, remainingBsToPay); // El monto nunca es negativo
+  // 🔑 LÓGICA DE PAGO MIXTO (UNIFICADO)
+  
+  // Calcular la suma de todos los pagos cubiertos en Bs
+  const totalCoveredBs = paymentBreakdown.reduce((sum, line) => {
+      return sum + line.amountBsEquivalent;
+  }, 0);
 
-  // Valor que se usará para el registro final de pago Bs (calculado)
-  const mixedBsCheckoutValue = safeRemainingBs;
+  // Calcular el restante Bs que falta pagar
+  const remainingBsToPay = totalBs - totalCoveredBs;
+  const safeRemainingBs = Math.max(0, remainingBsToPay); // El monto nunca es negativo
+  
   // ==============================================
   
   // ==============================================
-  // 💡 FUNCIONES AUXILIARES DE VENTA
+  // 💡 FUNCIONES AUXILIARES DE VENTA Y PAGO MIXTO
   // ==============================================
   const handleBarcodeScanned = (code: string) => {
     const product = products.find((p) => p.barcode === code)
@@ -443,6 +464,51 @@ export default function SalesView() {
     itemToUpdate.priceBs = itemToUpdate.priceUsd * newQuantity * safeBcvRate 
     setCart(updatedCart)
   }
+
+  const addPaymentLine = () => {
+    const rawAmount = Number.parseFloat(newPaymentAmount || "0");
+    if (rawAmount <= 0 || !Number.isFinite(rawAmount)) {
+        alert("Ingrese un monto válido.");
+        return;
+    }
+    
+    const isUsdPayment = USD_PAYMENT_METHODS.includes(newPaymentMethod);
+    const currency = isUsdPayment ? 'USD' : 'BS';
+    
+    let amountBsEquivalent: number;
+    let amount: number;
+
+    if (isUsdPayment) {
+        amount = rawAmount; // Monto en USD
+        amountBsEquivalent = rawAmount * safeBcvRate;
+    } else {
+        amount = rawAmount; // Monto en BS
+        amountBsEquivalent = rawAmount;
+    }
+    
+    // VALIDACIÓN: Limitar para que no se exceda mucho el total pendiente
+    const totalRemaining = totalBs - totalCoveredBs;
+    if (amountBsEquivalent > totalRemaining && amountBsEquivalent > totalRemaining + 0.02) { 
+        alert(`Este pago (Bs ${amountBsEquivalent.toFixed(2)}) excede el monto restante a pagar (Bs ${totalRemaining.toFixed(2)}).`);
+        return;
+    }
+
+    const newPayment: PaymentLine = {
+        id: Date.now(),
+        method: newPaymentMethod,
+        currency: currency,
+        amount: amount, 
+        amountBsEquivalent: amountBsEquivalent,
+    };
+
+    setPaymentBreakdown(prev => [...prev, newPayment]);
+    setNewPaymentMethod("cash"); // Resetear a cash o el método más usado
+    setNewPaymentAmount("");
+  };
+
+  const removePaymentLine = (id: number) => {
+      setPaymentBreakdown(prev => prev.filter(p => p.id !== id));
+  };
   
   // ==============================================
   // 🛒 Lógica de Checkout FINAL
@@ -460,18 +526,19 @@ export default function SalesView() {
     const isClientDataEntered = currentDocument.length >= 6 && clientName.trim().length > 0;
 
     if (paymentMethod === "mixed") {
-        const usd = Number.parseFloat(mixedUsd || "0")
-        const bs = mixedBsCheckoutValue; // Usamos el valor CALCUADO
         
-        if (isNaN(usd) || usd < 0) return alert("Ingresa un monto USD válido para el pago mixto");
+        if (paymentBreakdown.length === 0) {
+            return alert("Debe añadir al menos un método de pago mixto.");
+        }
         
-        // Verificación de que el total cubierto es correcto
-        const combined = usd * safeBcvRate + bs;
+        // Nueva validación: La suma de todos los pagos debe cubrir el total
+        const combined = totalCoveredBs; 
         const roundedTotal = Number(totalBs.toFixed(2));
         const sum = Number(combined.toFixed(2));
 
-        if (Math.abs(sum - roundedTotal) > 0.02)
-            return alert(`Error en el cálculo del pago mixto. La suma de los pagos no cubre el total Bs ${roundedTotal.toFixed(2)}.`);
+        // Permite una pequeña tolerancia por errores de redondeo (0.02 Bs)
+        if (sum < roundedTotal && Math.abs(sum - roundedTotal) > 0.02)
+            return alert(`Error en el cálculo del pago mixto. La suma de los pagos (${sum.toFixed(2)} Bs) no cubre el total (${roundedTotal.toFixed(2)} Bs).\nFaltan por cubrir: Bs ${(totalBs - totalCoveredBs).toFixed(2)}`);
     }
 
     const confirmation = window.confirm(
@@ -524,11 +591,11 @@ export default function SalesView() {
           }
           
           let finalUnitUsd: number;
-          if (isPayingInUsd) {
-              // PAGO EN USD: usa el precio ajustado/manual que está en item.priceUsd
+          if (isPayingInUsdDiscounted) {
+              // PAGO ÚNICO EN USD (con descuento): usa el precio ajustado/manual que está en item.priceUsd
               finalUnitUsd = item.priceUsd; 
           } else {
-              // PAGO EN BS (incluyendo Biopago): usa el precio completo/base
+              // PAGO EN BS, MIXTO o CUALQUIER OTRO: usa el precio completo/base
               finalUnitUsd = calculateFullBasePrice(product);
           }
 
@@ -560,9 +627,23 @@ export default function SalesView() {
       }
 
       if (paymentMethod === "mixed") {
+        const totalPagadoUsd = paymentBreakdown
+            .filter(p => p.currency === 'USD')
+            .reduce((sum, p) => sum + p.amount, 0);
+        
+        const totalPagadoBs = paymentBreakdown
+            .filter(p => p.currency === 'BS')
+            .reduce((sum, p) => sum + p.amount, 0);
+            
         saleData.paymentBreakdown = {
-          pagoUsd: Number.parseFloat(mixedUsd || "0"),
-          pagoBs: mixedBsCheckoutValue, // Usamos el valor calculado
+          totalPagadoUsd: totalPagadoUsd,
+          totalPagadoBs: totalPagadoBs, 
+          detallePagos: paymentBreakdown.map(p => ({
+              method: p.method,
+              currency: p.currency,
+              amount: p.amount, 
+              amountBsEquivalent: p.amountBsEquivalent,
+          })),
         }
       }
 
@@ -571,29 +652,7 @@ export default function SalesView() {
       // 🔑 3. GENERAR PDF DE FACTURA
       // COMENTADO: Desactivar la generación automática de PDF
       /*
-      const saleForPdf: Sale = {
-          id: newSaleRef.id,
-          createdAt: { toDate: () => new Date() }, 
-          clientName: clientName || "CONSUMIDOR FINAL",
-          clientDocument: currentDocument || "N/A",
-          clientAddress: clientAddress || "N/A",
-          clientPhone: currentPhone || "N/A",
-          cart: itemsForSale.map(item => ({ 
-              productId: item.productId,
-              name: item.name,
-              quantity: item.quantity,
-              priceUsd: item.priceUsdUnit, 
-          })),
-          subtotalUsd: subtotalUsd, 
-          discountUsd: discountAmountUsd, 
-          ivaUsd: 0, 
-          totalUsd: totalUsd,
-          totalBs: totalBs,
-          bcvRate: safeBcvRate,
-          paymentMethod: paymentMethod,
-      }
-
-      generateInvoice(businessName, saleForPdf, businessInfo) 
+      ...
       */
 
       // 4. Actualizar Inventario 
@@ -609,7 +668,7 @@ export default function SalesView() {
       alert("Venta registrada exitosamente")
       // Limpiar estados
       setCart([])
-      setMixedUsd("")
+      setPaymentBreakdown([]) // Limpiar el desglose
       setDiscountPercentage(0)
       setClientId(null)
       setClientDocumentPrefix("V")
@@ -630,6 +689,33 @@ export default function SalesView() {
       product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       product.category.toLowerCase().includes(searchTerm.toLowerCase()),
   )
+  
+  // Mapeo para nombres de métodos de pago en la UI
+  const getMethodDisplayName = (method: BreakdownMethod) => {
+    switch (method) {
+        case 'cash': return 'Efectivo USD';
+        case 'zelle': return 'Zelle USD';
+        case 'binance': return 'Binance USD';
+        case 'debit': return 'Débito Bs';
+        case 'transfer': return 'Transferencia Bs';
+        case 'pagoMovil': return 'Pago Móvil Bs';
+        case 'biopago': return 'Biopago Bs';
+        default: return method;
+    }
+  };
+  
+  // Determinar si el nuevo monto excede el restante para deshabilitar el botón
+  const isNewAmountInvalid = (() => {
+      const amount = Number.parseFloat(newPaymentAmount || "0");
+      if (amount <= 0 || !Number.isFinite(amount)) return true;
+      
+      const isUsdPayment = USD_PAYMENT_METHODS.includes(newPaymentMethod);
+      const amountBsEquivalent = isUsdPayment ? amount * safeBcvRate : amount;
+
+      const totalRemaining = totalBs - totalCoveredBs;
+      // Deshabilita si el pago excede el restante por más de 0.02 Bs (tolerancia de redondeo)
+      return amountBsEquivalent > totalRemaining + 0.02;
+  })();
 
   // ==============================================
   // 🖥️ JSX (RENDERIZADO)
@@ -642,6 +728,7 @@ export default function SalesView() {
       className="relative"
     >
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
+        {/* COLUMNA IZQUIERDA: Búsqueda y Productos */}
         <div className="lg:col-span-2 space-y-4 lg:space-y-6">
           <div className="flex items-center justify-between">
             <h2 className="text-2xl lg:text-3xl font-bold">Punto de Venta</h2>
@@ -778,9 +865,9 @@ export default function SalesView() {
                 const salePriceBs = displayPrices.bs;
 
                 // Marcador visual para saber qué precio se está usando
-                const isFullPrice = !USD_PAYMENT_METHODS.includes(paymentMethod);
-                const priceLabel = isFullPrice ? "PRECIO BASE (Bs)" : "PRECIO USD (Dscto)";
-                const priceColor = isFullPrice ? "text-red-500" : "text-green-500";
+                const isPriceDiscounted = isPayingInUsdDiscounted;
+                const priceLabel = isPriceDiscounted ? "PRECIO USD (Dscto)" : "PRECIO BASE (Bs)";
+                const priceColor = isPriceDiscounted ? "text-green-500" : "text-red-500";
 
                 return (
                   <Card key={product.id} className="hover:shadow-md transition-shadow">
@@ -823,6 +910,7 @@ export default function SalesView() {
           </div>
         </div>
 
+        {/* COLUMNA DERECHA: Carrito y Pago (MEJORA DE SCROLL APLICADA AQUÍ) */}
         <button
           onClick={() => setShowCart(true)}
           className="lg:hidden fixed bottom-6 right-6 z-50 bg-primary text-primary-foreground rounded-full p-4 shadow-lg hover:bg-primary/90 transition-all"
@@ -846,7 +934,8 @@ export default function SalesView() {
         `}
         >
           <div className="h-full lg:h-auto flex items-end lg:items-start justify-center lg:justify-start p-4 lg:p-0">
-            <Card className="w-full max-w-lg lg:max-w-none lg:sticky lg:top-6 max-h-[90vh] lg:max-h-[calc(100vh-3rem)] flex flex-col">
+            {/* 🔑 AJUSTE DE ALTURA FIJA Y STICKY PARA EL SCROLL INTERNO */}
+            <Card className="w-full max-w-lg lg:max-w-none **lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)]** flex flex-col">
               <CardHeader className="flex-shrink-0">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-lg lg:text-xl">Carrito de Ventas</CardTitle>
@@ -855,7 +944,8 @@ export default function SalesView() {
                   </Button>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-4 flex-1 overflow-hidden flex flex-col">
+              {/* 🔑 CONTENIDO DEL CARRITO CON SCROLLBAR */}
+              <CardContent className="space-y-4 flex-1 **overflow-y-auto** flex flex-col">
                 {cart.length === 0 ? (
                   <p className="text-center text-muted-foreground py-8">Carrito vacío</p>
                 ) : (
@@ -866,8 +956,8 @@ export default function SalesView() {
 
                       // LÓGICA DE VISUALIZACIÓN DINÁMICA
                       const unitPriceFull = calculateFullBasePrice(product);
-                      // Precio unitario a mostrar en el carrito (coincide con el precio del producto si no es USD)
-                      const unitPriceToDisplay = isPayingInUsd ? item.priceUsd : unitPriceFull;
+                      // Precio unitario a mostrar en el carrito 
+                      const unitPriceToDisplay = isPayingInUsdDiscounted ? item.priceUsd : unitPriceFull;
                       const lineTotalBs = unitPriceToDisplay * item.quantity * safeBcvRate;
 
                       return (
@@ -907,7 +997,7 @@ export default function SalesView() {
                           </div>
 
                           <div className="text-sm text-muted-foreground">
-                            <span className={`font-semibold ${isPayingInUsd ? 'text-purple-600' : 'text-foreground'}`}>
+                            <span className={`font-semibold ${isPayingInUsdDiscounted ? 'text-purple-600' : 'text-foreground'}`}>
                                 ${unitPriceToDisplay.toFixed(2)} USD
                             </span>
                             x {item.quantity} ud/kg
@@ -916,7 +1006,7 @@ export default function SalesView() {
                           <div className="text-base font-semibold text-primary">
                             Total: Bs {lineTotalBs.toFixed(2)}
                           </div>
-                          {!isPayingInUsd && (
+                          {!isPayingInUsdDiscounted && (
                               <p className="text-xs text-muted-foreground mt-1">
                                   Usando precio completo (${unitPriceFull.toFixed(2)})
                               </p>
@@ -926,7 +1016,8 @@ export default function SalesView() {
                     })}
                   </div>
                 )}
-
+                
+                {/* 🔑 BLOQUE DE TOTALES Y PAGOS SIN SCROLL (siempre visible) */}
                 <div className="border-t border-border pt-4 space-y-3 flex-shrink-0">
                   
                   <div className="pt-2">
@@ -974,7 +1065,13 @@ export default function SalesView() {
                     <label className="text-sm font-medium">Método de Pago</label>
                     <select
                       value={paymentMethod}
-                      onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+                      onChange={(e) => {
+                          setPaymentMethod(e.target.value as PaymentMethod);
+                          // Limpiar el desglose si se cambia a un método simple
+                          if (e.target.value !== "mixed") {
+                              setPaymentBreakdown([]);
+                          }
+                      }}
                       className="w-full px-3 py-2 border border-input rounded-md bg-background mt-2 text-sm"
                     >
                       <option value="cash">Efectivo (USD)</option>
@@ -983,48 +1080,130 @@ export default function SalesView() {
                       <option value="debit">Débito</option>
                       <option value="transfer">Transferencia Bancaria</option>
                       <option value="pagoMovil">Pago Móvil</option>
-                      <option value="biopago">Biopago</option> {/* AGREGADO */}
-                      <option value="mixed">Mixto</option>
+                      <option value="biopago">Biopago</option> 
+                      <option value="mixed">Mixto (Múltiples Pagos)</option>
                     </select>
                   </div>
 
-                  {/* Componente React de Pago Mixto con cálculo de restante Bs */}
+                  {/* 🔑 Bloque Unificado de Pago Mixto (AQUÍ ESTÁ LA CORRECCIÓN DEL BOTÓN) */}
                   {paymentMethod === "mixed" && (
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-xs text-muted-foreground">Efectivo (USD) Entregado</label>
-                        <Input
-                          id="usd-input"
-                          value={mixedUsd}
-                          onChange={(e) => setMixedUsd(e.target.value)}
-                          placeholder="0.00"
-                          type="number"
-                          step="0.01"
-                          className="text-sm h-9"
-                        />
+                    <div className="space-y-3 p-3 border rounded-md bg-muted/20">
+                      <h4 className="font-semibold text-sm">Desglose de Pagos para Cubrir Bs {totalBs.toFixed(2)}</h4>
+                        
+                      {/* Lista de Pagos Añadidos - CON SCROLL BAR FIJO */}
+                      {paymentBreakdown.length > 0 && (
+                          <div className="space-y-2 max-h-32 overflow-y-auto pr-2"> 
+                            <h5 className="text-xs font-semibold text-muted-foreground">Métodos Utilizados:</h5>
+                            {paymentBreakdown.map((p) => (
+                              <div key={p.id} className="flex justify-between items-center text-sm p-2 bg-background rounded-md border">
+                                <span className="font-medium text-primary">
+                                    {getMethodDisplayName(p.method)}:
+                                </span>
+                                
+                                <span className="font-bold text-foreground">
+                                    {p.currency === 'USD' ? `$${p.amount.toFixed(2)}` : `Bs ${p.amount.toFixed(2)}`}
+                                </span>
+                                
+                                <span className="text-xs text-muted-foreground ml-2">
+                                    (Equiv. Bs {p.amountBsEquivalent.toFixed(2)})
+                                </span>
+                                
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => removePaymentLine(p.id)}
+                                  className="h-6 w-6 flex-shrink-0"
+                                >
+                                  <X className="w-4 h-4 text-red-500" />
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                      )}
+
+
+                      {/* Formulario para Añadir Nuevo Pago CON BOTÓN "Añadir Restante" */}
+                      <div className="pt-2 border-t mt-3">
+                          <div className="flex justify-between items-center mb-1">
+                              <label className="text-sm font-medium">Añadir Nuevo Pago</label>
+                              {/* 🔑 BOTÓN AÑADIR RESTANTE: Se muestra si el restante es positivo */}
+                              {safeRemainingBs > 0 && (
+                                  <Button
+                                      onClick={() => {
+                                          const isUsdPayment = USD_PAYMENT_METHODS.includes(newPaymentMethod);
+                                          let amountToAdd: number;
+
+                                          if (isUsdPayment) {
+                                              // Convertir el restante en Bs a USD, redondeando a 2 decimales
+                                              amountToAdd = Math.round((safeRemainingBs / safeBcvRate) * 100) / 100;
+                                          } else {
+                                              // El monto en Bs es el restante, redondeando a 2 decimales
+                                              amountToAdd = Math.round(safeRemainingBs * 100) / 100;
+                                          }
+                                          setNewPaymentAmount(amountToAdd.toString());
+                                      }}
+                                      variant="outline"
+                                      size="xs"
+                                      className="h-7 text-xs px-2 py-0 border-dashed hover:bg-primary/5"
+                                  >
+                                      Añadir Restante ({USD_PAYMENT_METHODS.includes(newPaymentMethod) ? 'USD' : 'Bs'})
+                                  </Button>
+                              )}
+                          </div>
+                          <div className="grid grid-cols-3 gap-2">
+                            <select
+                                value={newPaymentMethod}
+                                onChange={(e) => setNewPaymentMethod(e.target.value as BreakdownMethod)}
+                                className="px-2 py-1 border border-input rounded-md bg-background text-sm h-9 col-span-1"
+                            >
+                                <option value="cash">Efectivo USD</option>
+                                <option value="zelle">Zelle USD</option>
+                                <option value="binance">Binance USD</option>
+                                <option value="debit">Débito Bs</option>
+                                <option value="transfer">Transferencia Bs</option>
+                                <option value="pagoMovil">Pago Móvil Bs</option>
+                                <option value="biopago">Biopago Bs</option>
+                            </select>
+                            <Input
+                                value={newPaymentAmount}
+                                onChange={(e) => setNewPaymentAmount(e.target.value)}
+                                placeholder="Monto (USD/Bs)"
+                                type="number"
+                                step="0.01"
+                                className="text-sm h-9 col-span-1"
+                            />
+                            <Button 
+                              onClick={addPaymentLine} 
+                              size="sm" 
+                              className="h-9 col-span-1"
+                              disabled={isNewAmountInvalid}
+                            >
+                              Añadir Pago
+                            </Button>
+                          </div>
+                           {isNewAmountInvalid && (
+                              <p className="text-xs text-red-500 mt-1">El monto debe ser válido y no puede exceder el restante por pagar.</p>
+                          )}
                       </div>
-                      <div>
-                        <label className="text-xs font-semibold text-primary">Restante en Bs a Pagar</label>
-                        <Input
-                          id="bs-input-calculated"
-                          value={safeRemainingBs.toFixed(2)} 
-                          readOnly 
-                          placeholder="0.00"
-                          className="text-sm h-9 font-bold bg-primary/10 border-primary"
-                        />
-                      </div>
-                      <div className="col-span-2 text-xs text-muted-foreground">
-                        {remainingBsToPay > 0 
-                            ? `El cliente debe pagar ${safeRemainingBs.toFixed(2)} Bs adicionales.` 
-                            : "El monto USD cubre el total o hay un excedente."
-                        }
+                        
+                      {/* Resumen y Restante */}
+                      <div className="pt-2 border-t space-y-1">
+                          <div className="flex justify-between text-sm font-medium">
+                              <span>Total Pagado (Equiv. Bs):</span>
+                              <span className={safeRemainingBs > 0 ? "text-orange-500" : "text-green-600"}>Bs {totalCoveredBs.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between font-bold text-base">
+                              <span className="text-primary">Restante por Cubrir:</span>
+                              <span className="text-red-600">Bs {safeRemainingBs.toFixed(2)}</span>
+                          </div>
                       </div>
                     </div>
                   )}
 
                   <Button
                     onClick={handleCheckout}
-                    disabled={cart.length === 0 || !Number.isFinite(totalUsd) || !Number.isFinite(totalBs) || isClientSearching}
+                    // Deshabilitar si es pago mixto y aún queda un restante significativo
+                    disabled={cart.length === 0 || !Number.isFinite(totalUsd) || !Number.isFinite(totalBs) || isClientSearching || (paymentMethod === "mixed" && safeRemainingBs > 0.02)}
                     className="w-full bg-accent hover:bg-accent/90"
                   >
                     Confirmar Venta
