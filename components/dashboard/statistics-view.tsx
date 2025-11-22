@@ -6,6 +6,8 @@ import { db } from "@/lib/firebase"
 import { collection, query, where, getDocs } from "firebase/firestore"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button" 
+import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react" 
 import {
   BarChart,
   Bar,
@@ -19,8 +21,18 @@ import {
   Pie,
   Cell,
 } from "recharts"
-// ⭐️ NUEVO: Importación para animaciones
 import { motion } from "framer-motion"
+
+// 🔑 COMPONENTE SELECT BÁSICO (Para consistencia visual)
+const Select = ({ children, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) => (
+    <select 
+        {...props} 
+        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+    >
+        {children}
+    </select>
+);
+
 
 interface Sale {
   id: string
@@ -34,9 +46,51 @@ interface Sale {
   totalBs: any
   totalUsd: any
   paymentMethod: string
+  paymentMethodDescription?: string 
   bcvRate: number
   createdAt: any
 }
+
+// Función de utilidad para conversión segura
+const safeFloat = (value: any): number => {
+  return Number.parseFloat(String(value)) || 0
+}
+
+// 🔑 FUNCIÓN AUXILIAR DE VISUALIZACIÓN
+const getDisplayPaymentMethod = (sale: Sale): string => {
+    if (sale.paymentMethodDescription) {
+        return sale.paymentMethodDescription;
+    }
+    
+    if (sale.paymentMethod === 'mixed') {
+        return 'Mixto (Detalle no guardado)'; 
+    }
+    
+    switch (sale.paymentMethod) {
+        case 'cash': return 'Efectivo (USD)';
+        case 'zelle': return 'Zelle';
+        case 'binance': return 'Binance';
+        case 'debit': return 'Débito';
+        case 'transfer': return 'Transferencia';
+        case 'pagoMovil': return 'Pago Móvil';
+        case 'biopago': return 'Biopago';
+        default: return sale.paymentMethod || 'N/A';
+    }
+}
+
+// 🔑 CONSTANTE PARA EL FILTRO DE MÉTODOS DE PAGO
+const PAYMENT_METHODS = [
+  { value: "all", label: "Todos los Métodos" },
+  { value: "cash", label: "Efectivo (USD)" },
+  { value: "zelle", label: "Zelle" },
+  { value: "binance", label: "Binance" },
+  { value: "debit", label: "Débito" },
+  { value: "transfer", label: "Transferencia" },
+  { value: "pagoMovil", label: "Pago Móvil" },
+  { value: "biopago", label: "Biopago" },
+  { value: "mixed", label: "Pago Mixto" },
+];
+
 
 export default function StatisticsView() {
   const { user } = useAuth()
@@ -44,11 +98,12 @@ export default function StatisticsView() {
   const [loading, setLoading] = useState(true)
   const [dateFrom, setDateFrom] = useState("")
   const [dateTo, setDateTo] = useState("")
+  
+  // 🔑 ESTADOS DE FILTRO Y PAGINACIÓN
+  const [filterMethod, setFilterMethod] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const salesPerPage = 10; // Ventas por página
 
-  // Función de utilidad para conversión segura
-  const safeFloat = (value: any): number => {
-    return Number.parseFloat(String(value)) || 0
-  }
 
   useEffect(() => {
     if (user) {
@@ -62,19 +117,19 @@ export default function StatisticsView() {
     try {
       const salesQuery = query(collection(db, "ventas"), where("userId", "==", user.uid))
       const salesSnapshot = await getDocs(salesQuery)
-      const salesData = salesSnapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      })) as Sale[]
-
-      // Convertir valores numéricos a float para asegurar cálculos
-      const cleanedSales = salesData.map((sale) => ({
-        ...sale,
-        totalBs: safeFloat(sale.totalBs),
-        totalUsd: safeFloat(sale.totalUsd),
-      }))
-
-      setSales(cleanedSales)
+      
+      const salesData = salesSnapshot.docs.map((doc) => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          paymentMethodDescription: data.paymentMethodDescription || undefined, 
+          totalBs: safeFloat(data.totalBs),
+          totalUsd: safeFloat(data.totalUsd),
+        }
+      }) as Sale[]
+      
+      setSales(salesData)
     } catch (error) {
       console.error("Error loading sales data:", error)
     } finally {
@@ -82,15 +137,39 @@ export default function StatisticsView() {
     }
   }
 
-  // Filtrado por fecha
-  const filteredSales = sales.filter((sale) => {
-    const saleDate = sale.createdAt.toDate().toISOString().split("T")[0]
-    const matchesFrom = !dateFrom || saleDate >= dateFrom
-    const matchesTo = !dateTo || saleDate <= dateTo
-    return matchesFrom && matchesTo
-  })
+  // 🔑 LÓGICA DE FILTRADO Y ORDENAMIENTO COMBINADO
+  const filteredSales = sales
+    // 1. Filtrado por fecha y método
+    .filter((sale) => {
+      const saleDate = sale.createdAt.toDate().toISOString().split("T")[0]
+      const matchesFrom = !dateFrom || saleDate >= dateFrom
+      const matchesTo = !dateTo || saleDate <= dateTo
+      
+      const matchesMethod = filterMethod === "all" || sale.paymentMethod === filterMethod;
+      
+      return matchesFrom && matchesTo && matchesMethod
+    })
+    // 2. Ordenamiento: Más reciente primero (DESCENDENTE)
+    .sort((a, b) => {
+      // Orden descendente (más reciente primero)
+      const dateA = a.createdAt.toDate().getTime();
+      const dateB = b.createdAt.toDate().getTime();
+      return dateB - dateA; // Esta resta garantiza el ordenamiento de más reciente a más antigua
+    });
+  
+  // 🔑 LÓGICA DE PAGINACIÓN
+  const indexOfLastSale = currentPage * salesPerPage;
+  const indexOfFirstSale = indexOfLastSale - salesPerPage;
+  const currentSalesForTable = filteredSales.slice(indexOfFirstSale, indexOfLastSale);
+  const totalPages = Math.ceil(filteredSales.length / salesPerPage);
 
-  // 📊 Datos para el Gráfico de Barras: Ventas Diarias
+  const paginate = (pageNumber: number) => {
+      if (pageNumber > 0 && pageNumber <= totalPages) {
+          setCurrentPage(pageNumber);
+      }
+  };
+
+  // 📊 Datos para el Gráfico de Barras: Ventas Diarias (Usa filteredSales, pero necesita ordenarse por fecha para el gráfico)
   const salesByDay = filteredSales.reduce((acc, sale) => {
     const date = sale.createdAt.toDate().toLocaleDateString("es-VE", {
       day: "2-digit",
@@ -104,13 +183,18 @@ export default function StatisticsView() {
     return acc
   }, {} as Record<string, { date: string; totalUsd: number; totalBs: number }>)
 
+  // El gráfico de barras necesita que sus datos estén ordenados ascendentemente (más antiguo primero) para que se muestre correctamente en el eje X.
   const barChartData = Object.values(salesByDay).sort(
-    (a, b) => new Date(a.date.split("/").reverse().join("-")).getTime() - new Date(b.date.split("/").reverse().join("-")).getTime(),
+    (a, b) => {
+        const dateA = new Date(a.date.split("/").reverse().join("-")).getTime(); // Convierte DD/MM a MM/DD para parsear
+        const dateB = new Date(b.date.split("/").reverse().join("-")).getTime();
+        return dateA - dateB; // Orden ascendente
+    }
   )
 
-  // 📊 Datos para el Gráfico de Torta: Métodos de Pago
+  // 📊 Datos para el Gráfico de Torta: Métodos de Pago (Usa filteredSales)
   const salesByPaymentMethod = filteredSales.reduce((acc, sale) => {
-    const method = sale.paymentMethod
+    const method = getDisplayPaymentMethod(sale)
     if (!acc[method]) {
       acc[method] = { name: method, value: 0 }
     }
@@ -128,43 +212,55 @@ export default function StatisticsView() {
   const COLORS = ["#0088FE", "#00C49F", "#FFBB28", "#FF8042", "#8884d8"]
 
   if (loading) {
-    return <div className="text-center py-8">Cargando estadísticas...</div>
+    return <div className="text-center py-8 flex justify-center items-center"><Loader2 className="w-6 h-6 animate-spin mr-2" /> Cargando estadísticas...</div>
   }
 
   return (
-    // ⭐️ AJUSTE DE ANIMACIÓN: motion.div envuelve todo el contenido
     <motion.div
-      initial={{ opacity: 0, y: 20 }} // Comienza invisible y 20px abajo
-      animate={{ opacity: 1, y: 0 }} // Termina visible y en su posición (subiendo)
-      transition={{ duration: 0.5, ease: "easeOut" }} // Duración de 0.5 segundos
-      className="space-y-4 md:space-y-6"
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, ease: "easeOut" }}
+      className="space-y-4 md:space-y-6 p-4 md:p-0" 
     >
       <div>
         <h2 className="text-2xl md:text-3xl font-bold text-foreground mb-2 md:mb-4">Estadísticas de Ventas</h2>
         <p className="text-sm md:text-base text-muted-foreground">Análisis de rendimiento de tu negocio.</p>
       </div>
 
+      {/* 🔑 CONTROLES DE FILTRO (Fecha y Método de Pago) */}
       <div className="flex flex-col md:flex-row gap-4 mb-6">
         <Input
           type="date"
           value={dateFrom}
-          onChange={(e) => setDateFrom(e.target.value)}
+          onChange={(e) => { setDateFrom(e.target.value); setCurrentPage(1); }} 
           placeholder="Desde"
           className="w-full md:w-auto"
         />
         <Input
           type="date"
           value={dateTo}
-          onChange={(e) => setDateTo(e.target.value)}
+          onChange={(e) => { setDateTo(e.target.value); setCurrentPage(1); }} 
           placeholder="Hasta"
           className="w-full md:w-auto"
         />
+        {/* Filtro por Método de Pago */}
+        <Select
+          value={filterMethod}
+          onChange={(e) => { setFilterMethod(e.target.value); setCurrentPage(1); }} 
+          className="w-full md:w-60"
+        >
+          {PAYMENT_METHODS.map(method => (
+            <option key={method.value} value={method.value}>
+              {method.label}
+            </option>
+          ))}
+        </Select>
       </div>
 
       {filteredSales.length === 0 ? (
         <Card>
           <CardContent className="py-8 text-center">
-            <p className="text-muted-foreground">No hay datos de ventas en el rango de fechas seleccionado.</p>
+            <p className="text-muted-foreground">No hay datos de ventas en el rango de fechas seleccionado o con el filtro aplicado.</p>
           </CardContent>
         </Card>
       ) : (
@@ -222,7 +318,7 @@ export default function StatisticsView() {
           <Card>
             <CardHeader className="px-4 pt-4 md:px-6 md:pt-6">
               <CardTitle className="text-base md:text-lg">Distribución por Método de Pago</CardTitle>
-            </CardHeader>
+            </CardHeader> {/* 🔑 CORRECCIÓN: Se reemplazó el </CardTitle> duplicado por </CardHeader> */}
             <CardContent className="h-64 px-4 pb-4 md:px-6 md:pb-6">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -269,7 +365,8 @@ export default function StatisticsView() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredSales.map((sale) => (
+                    {/* Usar las ventas paginadas (que ya están ordenadas) */}
+                    {currentSalesForTable.map((sale) => (
                       <tr key={sale.id} className="border-b border-border hover:bg-muted/50">
                         <td className="py-3 px-4">
                           {new Date(sale.createdAt.toDate()).toLocaleDateString("es-VE")}
@@ -281,12 +378,39 @@ export default function StatisticsView() {
                         <td className="text-right py-3 px-4 font-semibold text-primary">
                           Bs {(safeFloat(sale.totalBs) || 0).toFixed(2)}
                         </td>
-                        <td className="py-3 px-4">{sale.paymentMethod}</td>
+                        <td className="py-3 px-4">{getDisplayPaymentMethod(sale)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              
+              {/* 🔑 CONTROLES DE PAGINACIÓN */}
+              {totalPages > 1 && (
+                <div className="flex justify-between items-center mt-4">
+                  <span className="text-sm text-muted-foreground">
+                    Página {currentPage} de {totalPages}
+                  </span>
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={() => paginate(currentPage - 1)}
+                      disabled={currentPage === 1}
+                      variant="outline"
+                      size="icon"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      onClick={() => paginate(currentPage + 1)}
+                      disabled={currentPage === totalPages}
+                      variant="outline"
+                      size="icon"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

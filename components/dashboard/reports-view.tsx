@@ -10,20 +10,19 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input" 
 import { Label } from "@/components/ui/label" 
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table" // 🔑 Importación de la tabla de Shadcn/ui para mejor estilo
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table" 
 // Importaciones de iconos y animación
-import { FileText, Download, Settings, Upload, Loader2, RefreshCw, Tag, DollarSign, Euro } from "lucide-react" // 🔑 Añadidos DollarSign, Euro para métricas
+import { FileText, Download, Settings, Upload, Loader2, RefreshCw, Tag, DollarSign, Euro, ChevronLeft, ChevronRight } from "lucide-react" // 🔑 Añadidos ChevronLeft/Right para paginación
 import { motion } from "framer-motion"
-// import { toast } from "sonner" // Asumiendo que usas Sonner para notificaciones
+// import { toast } from "sonner" 
 
 // 🔑 IMPORTACIÓN FUNCIONAL
-// NOTA: Se asume que generateInventoryReport ha sido modificado en su librería para aceptar businessInfo
 import { generateInventoryReport, generateInvoice, generateProductLabels, BusinessInfo, Sale as SaleInterface } from "@/lib/pdf-generator" 
 // 🔑 NUEVAS IMPORTACIONES: Funciones de servicio BCV
 import { getBCVRate, fetchBCVRateFromAPI } from "@/lib/bcv-service" 
 
 
-// Componente Select personalizado para estilo (Se mantiene)
+// Componente Select personalizado para estilo
 const Select = ({ children, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) => (
     <select 
         {...props} 
@@ -33,7 +32,7 @@ const Select = ({ children, ...props }: React.SelectHTMLAttributes<HTMLSelectEle
     </select>
 );
 
-// 🔑 CONSTANTE DE BANCOS (Se mantiene)
+// 🔑 CONSTANTE DE BANCOS
 const VENEZUELAN_BANKS = [
     { code: "0102", name: "Banco de Venezuela, S.A. Banco Universal" },
     { code: "0105", name: "Banco Mercantil, C.A. Banco Universal" },
@@ -43,8 +42,21 @@ const VENEZUELAN_BANKS = [
     // ... (otros bancos, truncados por espacio)
 ];
 
+// 🔑 CONSTANTE PARA EL FILTRO DE MÉTODOS DE PAGO (NUEVO)
+const PAYMENT_METHODS = [
+  { value: "all", label: "Todos los Métodos" },
+  { value: "cash", label: "Efectivo (USD)" },
+  { value: "zelle", label: "Zelle" },
+  { value: "binance", label: "Binance" },
+  { value: "debit", label: "Débito" },
+  { value: "transfer", label: "Transferencia" },
+  { value: "pagoMovil", label: "Pago Móvil" },
+  { value: "biopago", label: "Biopago" },
+  { value: "mixed", label: "Pago Mixto" },
+];
+
 // ----------------------------------------------------------------------
-// 🔑 LOCAL LOGO SERVICE UTILITIES (Se mantiene la lógica funcional)
+// LOCAL LOGO SERVICE UTILITIES (Se mantiene la lógica funcional)
 // ----------------------------------------------------------------------
 const LOCAL_STORAGE_KEY = 'businessLogoBase64';
 const MAX_WIDTH = 100;
@@ -112,7 +124,7 @@ function processLogoFile(file: File): Promise<string> {
 }
 // ----------------------------------------------------------------------
 
-// Interfaces (Se mantienen)
+// Interfaces (Se mantienen y se añade la corrección)
 interface Product { 
   id: string
   name: string
@@ -127,6 +139,17 @@ interface Product {
 interface Sale extends SaleInterface {
     items: any[]; 
     createdAt: { toDate: () => Date };
+    paymentMethod?: string;
+    paymentMethodDescription?: string; 
+    totalUsd: number;
+    totalBs: number;
+    bcvRate: number;
+    clientInfo: {
+      name: string;
+      document: string;
+      phone: string;
+      address: string;
+    } | null;
 }
 
 interface FullBusinessInfo {
@@ -164,7 +187,7 @@ const defaultBusinessInfo: FullBusinessInfo = {
 }
 
 // ----------------------------------------------------------------------
-// COMPONENTE BusinessConfigModal (Se mantiene la funcionalidad, se ajusta el estilo de la card)
+// COMPONENTE BusinessConfigModal
 // ----------------------------------------------------------------------
 interface BusinessConfigModalProps {
     isConfigModalOpen: boolean;
@@ -191,12 +214,12 @@ const BusinessConfigModal = ({
 
     return (
         <div className={`fixed inset-0 z-50 bg-black/50 flex justify-center items-center backdrop-blur-sm`}>
-            <div className="bg-background rounded-xl shadow-2xl border border-border w-11/12 md:w-3/4 max-w-3xl max-h-[90vh] overflow-y-auto">
+            <div className className="bg-background rounded-xl shadow-2xl border border-border w-11/12 md:w-3/4 max-w-3xl max-h-[90vh] overflow-y-auto">
               
                 <div className="p-6">
                     <h3 className="text-2xl font-bold mb-4 border-b pb-2">Configuración Fiscal y Bancaria</h3>
                     <p className="text-sm text-muted-foreground mb-6">
-                      Actualiza los datos que aparecerán en tus facturas y reportes.
+                      Actualiza los datos que aparecerán en tus notas de entrega y reportes.
                     </p>
                     
                     <form onSubmit={saveBusinessInfo} className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
@@ -325,6 +348,32 @@ const BusinessConfigModal = ({
 // 🔑 COMPONENTE PRINCIPAL (ReportsView)
 // ----------------------------------------------------------------------
 
+// 💡 FUNCIÓN AUXILIAR DE VISUALIZACIÓN
+const getDisplayPaymentMethod = (sale: Sale): string => {
+    // 1. Priorizar el nuevo campo descriptivo (para ventas nuevas)
+    if (sale.paymentMethodDescription) {
+        return sale.paymentMethodDescription;
+    }
+    
+    // 2. Si es una venta antigua con pago mixto, mostrar un mensaje útil
+    if (sale.paymentMethod === 'mixed') {
+        return 'Mixto (Detalle no guardado)'; 
+    }
+    
+    // 3. Si no, usar el campo paymentMethod original con traducción simple
+    switch (sale.paymentMethod) {
+        case 'cash': return 'Efectivo (USD)';
+        case 'zelle': return 'Zelle';
+        case 'binance': return 'Binance';
+        case 'debit': return 'Débito';
+        case 'transfer': return 'Transferencia';
+        case 'pagoMovil': return 'Pago Móvil';
+        case 'biopago': return 'Biopago';
+        default: return sale.paymentMethod || 'N/A';
+    }
+}
+
+
 export default function ReportsView() {
   const { user } = useAuth()
   const [products, setProducts] = useState<Product[]>([])
@@ -333,6 +382,13 @@ export default function ReportsView() {
   const [loading, setLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false) 
   const [isGenerating, setIsGenerating] = useState(false) 
+  
+  // 🔑 NUEVOS ESTADOS PARA FILTRO Y PAGINACIÓN
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [filterMethod, setFilterMethod] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const salesPerPage = 10; // Ventas por página
   
   // Estado que contiene la tasa BCV real
   const [currentBcvRate, setCurrentBcvRate] = useState<number>(0) 
@@ -350,7 +406,7 @@ export default function ReportsView() {
       bankName: defaultBusinessInfo.bankName,
       bankAccountOwner: defaultBusinessInfo.bankAccountOwner,
       bankAccountNumber: defaultBusinessInfo.bankAccountNumber,
-      businessName: defaultBusinessInfo.businessName, // Añadido para completar BusinessInfo
+      businessName: defaultBusinessInfo.businessName, 
   });
   
   const [formInfo, setFormInfo] = useState<FullBusinessInfo>(defaultBusinessInfo);
@@ -371,15 +427,15 @@ export default function ReportsView() {
         
         if (newRateData && newRateData.rate > 0) {
             setCurrentBcvRate(newRateData.rate);
-            // toast.success(`Tasa BCV actualizada a Bs. ${newRateData.rate.toFixed(2)}`); // Usar toast si está disponible
+            // toast.success(`Tasa BCV actualizada a Bs. ${newRateData.rate.toFixed(2)}`); 
             alert(`Tasa BCV actualizada a Bs. ${newRateData.rate.toFixed(2)}`); 
         } else {
-            // toast.error("Error al obtener la tasa BCV. Intenta de nuevo."); // Usar toast si está disponible
+            // toast.error("Error al obtener la tasa BCV. Intenta de nuevo."); 
             alert("Error al obtener la tasa BCV. Intenta de nuevo.");
         }
     } catch (error) {
         console.error("Error fetching BCV rate:", error);
-        // toast.error("Error de conexión al actualizar la tasa BCV."); // Usar toast si está disponible
+        // toast.error("Error de conexión al actualizar la tasa BCV."); 
         alert("Error de conexión al actualizar la tasa BCV.");
     } finally {
         setRateIsUpdating(false);
@@ -388,7 +444,6 @@ export default function ReportsView() {
 
 
   const loadData = async () => {
-    // ... (Mantener la lógica de carga de datos sin cambios)
     if (!user) return
     setLoading(true)
     try {
@@ -477,10 +532,12 @@ export default function ReportsView() {
           bcvRate: Number(data.bcvRate || 0),
           clientInfo: data.clientInfo || null, 
           cart: data.items || [], 
+          paymentMethod: data.paymentMethod || 'N/A', 
+          paymentMethodDescription: data.paymentMethodDescription || undefined, 
         }
       }) as Sale[]
       
-      // @ts-ignore: se asume que existe la función toDate()
+      // @ts-ignore: se asume que createdAt existe y tiene la función toDate()
       const sortedSales = salesData.sort((a, b) => b.createdAt.toDate().getTime() - a.createdAt.toDate().getTime())
       setSales(sortedSales)
 
@@ -521,7 +578,7 @@ export default function ReportsView() {
 
     setRateIsUpdating(true); // Usamos este estado para mostrar carga
 
-    // 🔑 CAMBIO CLAVE: Procesar imagen, guardar localmente y actualizar estados
+    // 🔑 Procesar imagen, guardar localmente y actualizar estados
     processLogoFile(file)
         .then((base64String) => {
             // 1. Guardar Base64 optimizado en Local Storage (Gestión Local)
@@ -567,7 +624,7 @@ export default function ReportsView() {
       bankAccountOwner: formInfo.bankAccountOwner,
       bankAccountNumber: formInfo.bankAccountNumber,
       businessType: formInfo.businessType,
-      // 🔑 NOTA: logoBase64 NO se guarda aquí, ya que se gestiona localmente.
+      // logoBase64 NO se guarda aquí, ya que se gestiona localmente.
     };
 
     try {
@@ -624,16 +681,60 @@ export default function ReportsView() {
     }
   }
 
-// 🔑 CORRECCIÓN CLAVE: Función para generar factura con la firma correcta (solo 2 argumentos)
-// La firma es: generateInvoice(BusinessInfo, Sale)
+// 🔑 CORRECCIÓN CLAVE: Función para generar nota de entrega (anteriormente factura)
   const handleGenerateInvoice = (sale: Sale) => {
       
-    // Llamar a generateInvoice con solo dos argumentos
+    // 🔑 MODIFICACIÓN CLAVE: Usar el método descriptivo en la factura
+    const saleWithDescription = {
+        ...sale,
+        // Usar la descripción si existe, sino el método simple (obtenido de la función auxiliar)
+        paymentMethod: getDisplayPaymentMethod(sale)
+    }
+    
+    // El nombre de la función subyacente (generateInvoice) se mantiene por dependencia.
     generateInvoice( 
-        businessInfo, // Argumento 1: Datos del negocio (incluye logoBase64)
-        sale          // Argumento 2: Objeto de venta completo
+        businessInfo, 
+        saleWithDescription
     )
   }
+
+  // ---------------------------------------------------------------------------------------
+  // 🔑 LÓGICA DE FILTRADO, ORDENAMIENTO Y PAGINACIÓN (NUEVO)
+  // ---------------------------------------------------------------------------------------
+  const filteredSales = sales
+    // 1. Filtrado por fecha y método
+    .filter((sale) => {
+      // @ts-ignore: createdAt existe y tiene toDate()
+      const saleDate = sale.createdAt.toDate().toISOString().split("T")[0] 
+      const matchesFrom = !dateFrom || saleDate >= dateFrom
+      const matchesTo = !dateTo || saleDate <= dateTo
+      
+      const matchesMethod = filterMethod === "all" || sale.paymentMethod === filterMethod;
+      
+      return matchesFrom && matchesTo && matchesMethod
+    })
+    // 2. Ordenamiento: Más reciente primero (DESCENDENTE)
+    .sort((a, b) => {
+      // @ts-ignore: createdAt existe y tiene toDate()
+      const dateA = a.createdAt.toDate().getTime();
+      // @ts-ignore: createdAt existe y tiene toDate()
+      const dateB = b.createdAt.toDate().getTime();
+      return dateB - dateA; // Ordenamiento de más reciente a más antigua
+    });
+  
+  // 3. LÓGICA DE PAGINACIÓN
+  const indexOfLastSale = currentPage * salesPerPage;
+  const indexOfFirstSale = indexOfLastSale - salesPerPage;
+  const currentSalesForTable = filteredSales.slice(indexOfFirstSale, indexOfLastSale);
+  const totalPages = Math.ceil(filteredSales.length / salesPerPage);
+
+  const paginate = (pageNumber: number) => {
+      if (pageNumber > 0 && pageNumber <= totalPages) {
+          setCurrentPage(pageNumber);
+      }
+  };
+  // ---------------------------------------------------------------------------------------
+
 
   if (loading) {
     return <div className="text-center py-8 flex justify-center items-center"><Loader2 className="w-6 h-6 animate-spin mr-2" /> Cargando reportes...</div>
@@ -644,7 +745,7 @@ export default function ReportsView() {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, ease: "easeOut" }}
-      className="p-4 md:p-8 space-y-8" // Usamos el padding general y el espaciado
+      className="p-4 md:p-8 space-y-8"
     >
       {/* MODAL DE CONFIGURACIÓN */}
       <BusinessConfigModal 
@@ -657,13 +758,13 @@ export default function ReportsView() {
       />
       
       {/* ------------------------------------------- */}
-      {/* ENCABEZADO Y CONTROLES (SEPARACIÓN LIMPIA) */}
+      {/* ENCABEZADO Y CONTROLES */}
       {/* ------------------------------------------- */}
       <div className="flex justify-between items-center"> 
         <div>
           <h2 className="text-3xl font-extrabold tracking-tight text-foreground">Reportes de {businessName || 'Ventas'}</h2>
           <p className="text-sm text-muted-foreground mt-1">
-            Gestión y descarga de reportes e invoices en formato PDF.
+            Gestión y descarga de reportes y notas de entrega en formato PDF.
           </p>
         </div>
         
@@ -674,7 +775,7 @@ export default function ReportsView() {
             <Button 
                 onClick={() => setIsConfigModalOpen(true)}
                 size="icon" 
-                variant="outline" // Cambio a 'outline' o 'default' para destacar menos que las acciones principales
+                variant="outline" 
                 title="Configuración Fiscal y Bancaria"
             >
                 <Settings className="w-5 h-5" />
@@ -685,7 +786,7 @@ export default function ReportsView() {
                 onClick={triggerLogoInput} 
                 size="icon" 
                 variant="outline"
-                title="Subir Logo para Facturas"
+                title="Subir Logo para Notas de Entrega"
             >
                 <Upload className="w-5 h-5" />
             </Button>
@@ -703,9 +804,8 @@ export default function ReportsView() {
       </div>
       
       {/* ------------------------------------------- */}
-      {/* MÉTRICAS PRINCIPALES (USANDO GRID) */}
+      {/* MÉTRICAS PRINCIPALES */}
       {/* ------------------------------------------- */}
-      {/* 🔑 AJUSTE DE GRID: De 4 a 2 columnas principales */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-2">
         
         {/* Card 1: Tasa de Cambio BCV */}
@@ -732,7 +832,7 @@ export default function ReportsView() {
             </CardContent>
         </Card>
         
-        {/* 🔑 Card 2 (Antes Card 4): Items en Stock */}
+        {/* Card 2: Items en Stock */}
         <Card className="shadow-md">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">Items en Stock</CardTitle>
@@ -743,11 +843,10 @@ export default function ReportsView() {
                 <p className="text-xs text-muted-foreground mt-1">Productos únicos</p>
             </CardContent>
         </Card>
-        {/* 🔑 Se eliminaron las tarjetas de Total Ventas USD y Total Ventas Bs */}
       </div>
 
       {/* ------------------------------------------- */}
-      {/* SECCIÓN DE GENERACIÓN DE REPORTES (USANDO GRID DE 2 COLUMNAS) */}
+      {/* SECCIÓN DE GENERACIÓN DE REPORTES */}
       {/* ------------------------------------------- */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4"> 
         
@@ -805,23 +904,55 @@ export default function ReportsView() {
           </CardContent>
         </Card>
       </div>
+      
+      {/* ------------------------------------------- */}
+      {/* CONTROLES DE FILTRO (NUEVO) */}
+      {/* ------------------------------------------- */}
+      <div className="flex flex-col md:flex-row gap-4 mb-6 pt-4">
+        <Input
+          type="date"
+          value={dateFrom}
+          onChange={(e) => { setDateFrom(e.target.value); setCurrentPage(1); }} 
+          placeholder="Desde"
+          className="w-full md:w-auto"
+        />
+        <Input
+          type="date"
+          value={dateTo}
+          onChange={(e) => { setDateTo(e.target.value); setCurrentPage(1); }} 
+          placeholder="Hasta"
+          className="w-full md:w-auto"
+        />
+        {/* Filtro por Método de Pago */}
+        <Select
+          value={filterMethod}
+          onChange={(e) => { setFilterMethod(e.target.value); setCurrentPage(1); }} 
+          className="w-full md:w-60"
+        >
+          {PAYMENT_METHODS.map(method => (
+            <option key={method.value} value={method.value}>
+              {method.label}
+            </option>
+          ))}
+        </Select>
+      </div>
 
       {/* ------------------------------------------- */}
-      {/* HISTORIAL DE VENTAS (TABLA) */}
+      {/* HISTORIAL DE VENTAS (TABLA CON PAGINACIÓN Y FILTROS) */}
       {/* ------------------------------------------- */}
       <Card className="shadow-xl mt-8">
         <CardHeader className="px-6 pt-6">
           <CardTitle className="text-xl font-semibold">Historial de Ventas</CardTitle>
-          <p className="text-sm text-muted-foreground">Ventas recientes para generar facturas.</p>
+          <p className="text-sm text-muted-foreground">Ventas recientes para generar notas de entrega.</p>
         </CardHeader>
         <CardContent className="p-0">
-          {sales.length === 0 ? (
-            <p className="text-center text-muted-foreground py-8 text-sm">No hay ventas registradas</p>
+          {filteredSales.length === 0 ? (
+            <p className="text-center text-muted-foreground py-8 text-sm">No hay ventas registradas con los filtros actuales</p>
           ) : (
             <>
-              {/* Vista de tarjetas para móvil (Mejor estilo de card) */}
+              {/* Vista de tarjetas para móvil */}
               <div className="lg:hidden space-y-4 p-4">
-                {sales.map((sale) => (
+                {currentSalesForTable.map((sale) => (
                   // @ts-ignore: createdAt es un Timestamp de Firestore
                   <Card key={sale.id} className="shadow-sm border-l-4 border-primary/60 p-4 space-y-2">
                     <div className="flex justify-between items-start mb-2 border-b pb-2">
@@ -829,12 +960,11 @@ export default function ReportsView() {
                          {/* @ts-ignore: createdAt es un Timestamp de Firestore */}
                         Venta del {new Date(sale.createdAt.toDate()).toLocaleDateString("es-VE")}
                       </span>
-                      <span className="text-xs bg-secondary px-3 py-1 rounded-full font-medium">{sale.paymentMethod}</span>
+                      <span className="text-xs bg-secondary px-3 py-1 rounded-full font-medium">{getDisplayPaymentMethod(sale)}</span>
                     </div>
-                    {/* 🔑 Se eliminaron los totales de venta USD y Bs de la vista móvil */}
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Método de Pago:</span>
-                      <span className="font-semibold text-gray-700">{sale.paymentMethod}</span>
+                      <span className="font-semibold text-gray-700">{getDisplayPaymentMethod(sale)}</span>
                     </div>
 
                     <Button
@@ -845,30 +975,30 @@ export default function ReportsView() {
                       disabled={currentBcvRate === 0}
                     >
                       <Download className="w-4 h-4" />
-                      Descargar Factura
+                      Descargar Nota de Entrega 
                     </Button>
                   </Card>
                 ))}
               </div>
 
-              {/* Vista de tabla para desktop (Mejor estilo y Responsividad) */}
+              {/* Vista de tabla para desktop */}
               <div className="hidden lg:block overflow-x-auto">
                 <Table className="w-full text-sm">
                   <TableHeader className="bg-muted/50">
                     <TableRow>
                       <TableHead className="text-left py-4 px-6 font-semibold">Fecha</TableHead>
-                      {/* 🔑 Se eliminaron las cabeceras Total USD y Total Bs */}
                       <TableHead className="text-left py-4 px-6 font-semibold">Método de Pago</TableHead>
                       <TableHead className="text-center py-4 px-6 font-semibold">Acciones</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {sales.map((sale) => (
+                    {currentSalesForTable.map((sale) => (
                       <TableRow key={sale.id} className="hover:bg-muted/50 transition-colors">
                         {/* @ts-ignore: createdAt es un Timestamp de Firestore */}
                         <TableCell className="py-3 px-6">{new Date(sale.createdAt.toDate()).toLocaleDateString("es-VE")}</TableCell>
-                        {/* 🔑 Se eliminaron las celdas Total USD y Total Bs */}
-                        <TableCell className="py-3 px-6">{sale.paymentMethod}</TableCell>
+                        <TableCell className="py-3 px-6 font-medium">
+                            {getDisplayPaymentMethod(sale)}
+                        </TableCell>
                         <TableCell className="py-3 px-6 text-center">
                           <Button
                             onClick={() => handleGenerateInvoice(sale)}
@@ -878,7 +1008,7 @@ export default function ReportsView() {
                             disabled={currentBcvRate === 0}
                           >
                             <Download className="w-3 h-3" />
-                            Factura
+                            Nota de Entrega
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -886,6 +1016,33 @@ export default function ReportsView() {
                   </TableBody>
                 </Table>
               </div>
+              
+              {/* 🔑 CONTROLES DE PAGINACIÓN */}
+              {totalPages > 1 && (
+                <div className="flex justify-between items-center mt-4 p-4 border-t">
+                  <span className="text-sm text-muted-foreground">
+                    Mostrando {indexOfFirstSale + 1}–{Math.min(indexOfLastSale, filteredSales.length)} de {filteredSales.length} ventas | Página {currentPage} de {totalPages}
+                  </span>
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={() => paginate(currentPage - 1)}
+                      disabled={currentPage === 1}
+                      variant="outline"
+                      size="icon"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      onClick={() => paginate(currentPage + 1)}
+                      disabled={currentPage === totalPages}
+                      variant="outline"
+                      size="icon"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </CardContent>

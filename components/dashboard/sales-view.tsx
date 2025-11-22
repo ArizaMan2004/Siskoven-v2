@@ -16,13 +16,16 @@ import { getBCVRate } from "@/lib/bcv-service"
 import { generateInvoice, Sale, BusinessInfo } from "@/lib/pdf-generator" 
 
 // ==============================================
-// 📦 CONSTANTES PARA PREFIJOS
+// 📦 CONSTANTES PARA PREFIJOS Y PAGINACIÓN
 // ==============================================
 const DOCUMENT_PREFIXES = ["V", "E", "P", "R", "J", "G"];
 const PHONE_PREFIXES = ["0412", "0422", "0414", "0424", "0416", "0426"];
 
 // 🟢 Métodos de pago que aplican el precio en Divisas (Ajustado/Manual)
 const USD_PAYMENT_METHODS: PaymentMethod[] = ["cash", "zelle", "binance"];
+
+// 🔑 CONSTANTE DE PAGINACIÓN
+const PRODUCTS_PER_PAGE = 10; 
 
 // ==============================================
 // 📦 INTERFACES
@@ -75,12 +78,18 @@ export default function SalesView() {
   const [barcodeInput, setBarcodeInput] = useState("")
   const [loading, setLoading] = useState(true)
   const [showCart, setShowCart] = useState(false)
+  
+  // 🔑 ESTADOS DE BÚSQUEDA Y FILTRO
   const [searchTerm, setSearchTerm] = useState("")
+  const [selectedCategory, setSelectedCategory] = useState("all") 
+  
+  // 🔑 ESTADO DE PAGINACIÓN
+  const [currentPage, setCurrentPage] = useState(1) 
 
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash")
   const [discountPercentage, setDiscountPercentage] = useState(0)
   
-  // 🔑 NUEVOS ESTADOS PARA DESGLOSE DE PAGOS MIXTOS (UNIFICADO)
+  // 🔑 ESTADOS PARA DESGLOSE DE PAGOS MIXTOS (UNIFICADO)
   const [paymentBreakdown, setPaymentBreakdown] = useState<PaymentLine[]>([])
   const [newPaymentMethod, setNewPaymentMethod] = useState<BreakdownMethod>("cash")
   const [newPaymentAmount, setNewPaymentAmount] = useState("")
@@ -284,6 +293,50 @@ export default function SalesView() {
     };
   };
 
+  // 🔑 CÁLCULO DE CATEGORÍAS ÚNICAS
+  const uniqueCategories = Array.from(new Set(products.map(p => p.category))).sort()
+
+  // 💡 LÓGICA DE FILTRADO (Incorporando el filtro de categoría)
+  const filteredProducts = products.filter(
+    (product) => {
+        const matchesSearchTerm = 
+            product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            product.category.toLowerCase().includes(searchTerm.toLowerCase())
+        
+        const matchesCategory = selectedCategory === "all" || product.category === selectedCategory
+        
+        return matchesSearchTerm && matchesCategory
+    }
+  )
+  
+  // 🔑 EFECTO PARA RESETEAR PÁGINA CUANDO CAMBIA EL FILTRO/BÚSQUEDA
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, selectedCategory]);
+
+
+  // 🔑 LÓGICA DE PAGINACIÓN APLICADA A LOS PRODUCTOS FILTRADOS
+  const totalPages = Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE);
+  const indexOfLastProduct = currentPage * PRODUCTS_PER_PAGE;
+  const indexOfFirstProduct = indexOfLastProduct - PRODUCTS_PER_PAGE;
+  const paginatedProducts = filteredProducts.slice(indexOfFirstProduct, indexOfLastProduct);
+
+  // 💡 MANEJADORES DE PAGINACIÓN
+  const goToPage = (pageNumber: number) => {
+    if (pageNumber >= 1 && pageNumber <= totalPages) {
+      setCurrentPage(pageNumber);
+    }
+  };
+
+  // Asegurar que la página actual sea válida si los productos filtrados cambian
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(totalPages);
+    } else if (totalPages === 0) {
+      setCurrentPage(1);
+    }
+  }, [totalPages, currentPage]);
+
   // ==============================================
   // 🧮 BLOQUE DE CÁLCULO DE TOTALES (DINÁMICO SEGÚN PAGO)
   // ==============================================
@@ -346,6 +399,42 @@ export default function SalesView() {
   // ==============================================
   // 💡 FUNCIONES AUXILIARES DE VENTA Y PAGO MIXTO
   // ==============================================
+  
+  // Mapeo para nombres de métodos de pago en la UI (Usado en handleCheckout)
+  const getMethodDisplayName = (method: BreakdownMethod) => {
+    switch (method) {
+        case 'cash': return 'Efectivo USD';
+        case 'zelle': return 'Zelle USD';
+        case 'binance': return 'Binance USD';
+        case 'debit': return 'Débito Bs';
+        case 'transfer': return 'Transferencia Bs';
+        case 'pagoMovil': return 'Pago Móvil Bs';
+        case 'biopago': return 'Biopago Bs';
+        default: return method;
+    }
+  };
+
+  /**
+   * 🔑 NUEVA FUNCIÓN: Genera la descripción del método de pago para el registro (Mixto(pago1, pago2...))
+   */
+  const getPaymentMethodDescription = (method: PaymentMethod, breakdown: PaymentLine[]): string => {
+      if (method !== "mixed") {
+          return getMethodDisplayName(method as SinglePaymentMethod);
+      }
+
+      if (breakdown.length === 0) {
+          return "Mixto (Sin pagos detallados)";
+      }
+      
+      // Obtener una lista de métodos únicos (sin duplicar si pagan dos veces con Efectivo)
+      const uniqueMethods = Array.from(new Set(breakdown.map(p => p.method)));
+      
+      // Mapear los métodos únicos a sus nombres de visualización
+      const methodNames = uniqueMethods.map(getMethodDisplayName);
+      
+      return `Mixto (${methodNames.join(', ')})`;
+  };
+  
   const handleBarcodeScanned = (code: string) => {
     const product = products.find((p) => p.barcode === code)
     if (product) openAddDialog(product)
@@ -621,6 +710,8 @@ export default function SalesView() {
         totalUsd, 
         bcvRate: safeBcvRate,
         paymentMethod,
+        // 🔑 AÑADIDA DESCRIPCIÓN EXTENDIDA DEL MÉTODO DE PAGO
+        paymentMethodDescription: getPaymentMethodDescription(paymentMethod, paymentBreakdown),
         discountApplied: safeDiscount,
         discountUsd: discountAmountUsd, 
         createdAt: Timestamp.now(),
@@ -684,25 +775,6 @@ export default function SalesView() {
     }
   }
 
-  const filteredProducts = products.filter(
-    (product) =>
-      product.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      product.category.toLowerCase().includes(searchTerm.toLowerCase()),
-  )
-  
-  // Mapeo para nombres de métodos de pago en la UI
-  const getMethodDisplayName = (method: BreakdownMethod) => {
-    switch (method) {
-        case 'cash': return 'Efectivo USD';
-        case 'zelle': return 'Zelle USD';
-        case 'binance': return 'Binance USD';
-        case 'debit': return 'Débito Bs';
-        case 'transfer': return 'Transferencia Bs';
-        case 'pagoMovil': return 'Pago Móvil Bs';
-        case 'biopago': return 'Biopago Bs';
-        default: return method;
-    }
-  };
   
   // Determinar si el nuevo monto excede el restante para deshabilitar el botón
   const isNewAmountInvalid = (() => {
@@ -839,26 +911,69 @@ export default function SalesView() {
               </CardContent>
           </Card>
           
-          <div className="mb-6">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-              <input
-                type="text"
-                placeholder="Buscar productos..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
+          {/* 🔑 Bloque de BÚSQUEDA Y FILTRO POR CATEGORÍA Y PAGINACIÓN */}
+          <div className="mb-6 space-y-3">
+            {/* Controles de Búsqueda y Filtro */}
+            <div className="flex gap-4">
+                <div className="relative flex-grow">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+                    <input
+                        type="text"
+                        placeholder="Buscar productos por nombre o categoría..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                </div>
+                <select
+                    value={selectedCategory}
+                    onChange={(e) => setSelectedCategory(e.target.value)}
+                    className="px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white"
+                >
+                    <option value="all">Todas las Categorías</option>
+                    {uniqueCategories.map(category => (
+                        <option key={category} value={category}>{category}</option>
+                    ))}
+                </select>
             </div>
-            {searchTerm && (
+            
+            {/* Mensaje de resultados */}
+            {filteredProducts.length > 0 && (
               <p className="text-sm text-gray-600 mt-2">{filteredProducts.length} producto(s) encontrado(s)</p>
             )}
+
+            {/* 🔑 CONTROLES DE PAGINACIÓN */}
+            {totalPages > 1 && (
+                <div className="flex justify-between items-center pt-3 border-t border-dashed">
+                    <Button 
+                        onClick={() => goToPage(currentPage - 1)}
+                        disabled={currentPage === 1}
+                        variant="outline"
+                        size="sm"
+                    >
+                        Página Anterior
+                    </Button>
+                    <span className="text-sm font-medium">
+                        Página {currentPage} de {totalPages}
+                    </span>
+                    <Button 
+                        onClick={() => goToPage(currentPage + 1)}
+                        disabled={currentPage === totalPages}
+                        variant="outline"
+                        size="sm"
+                    >
+                        Página Siguiente
+                    </Button>
+                </div>
+            )}
+            
           </div>
 
           <div>
             <h3 className="text-base lg:text-lg font-semibold mb-3">Productos Disponibles</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 lg:gap-4">
-              {filteredProducts.map((product) => {
+              {/* 🔑 USANDO paginatedProducts EN LUGAR DE filteredProducts */}
+              {paginatedProducts.map((product) => {
                 // Uso de la nueva función para determinar el precio a mostrar
                 const displayPrices = getDisplayPrice(product);
                 const salePrice = displayPrices.usd;
@@ -906,11 +1021,23 @@ export default function SalesView() {
                   </Card>
                 )
               })}
+              
+              {/* Mensaje si no hay productos en la página actual */}
+              {paginatedProducts.length === 0 && filteredProducts.length > 0 && (
+                <p className="text-center text-muted-foreground col-span-2 py-8">
+                    No hay productos en esta página. Vuelve a la página anterior.
+                </p>
+              )}
+               {filteredProducts.length === 0 && (
+                <p className="text-center text-muted-foreground col-span-2 py-8">
+                    No se encontraron productos con el filtro o término de búsqueda actual.
+                </p>
+              )}
             </div>
           </div>
         </div>
 
-        {/* COLUMNA DERECHA: Carrito y Pago (MEJORA DE SCROLL APLICADA AQUÍ) */}
+        {/* COLUMNA DERECHA: Carrito y Pago */}
         <button
           onClick={() => setShowCart(true)}
           className="lg:hidden fixed bottom-6 right-6 z-50 bg-primary text-primary-foreground rounded-full p-4 shadow-lg hover:bg-primary/90 transition-all"
@@ -935,7 +1062,7 @@ export default function SalesView() {
         >
           <div className="h-full lg:h-auto flex items-end lg:items-start justify-center lg:justify-start p-4 lg:p-0">
             {/* 🔑 AJUSTE DE ALTURA FIJA Y STICKY PARA EL SCROLL INTERNO */}
-            <Card className="w-full max-w-lg lg:max-w-none **lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)]** flex flex-col">
+            <Card className="w-full max-w-lg lg:max-w-none lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] flex flex-col">
               <CardHeader className="flex-shrink-0">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-lg lg:text-xl">Carrito de Ventas</CardTitle>
@@ -945,7 +1072,7 @@ export default function SalesView() {
                 </div>
               </CardHeader>
               {/* 🔑 CONTENIDO DEL CARRITO CON SCROLLBAR */}
-              <CardContent className="space-y-4 flex-1 **overflow-y-auto** flex flex-col">
+              <CardContent className="space-y-4 flex-1 overflow-y-auto flex flex-col">
                 {cart.length === 0 ? (
                   <p className="text-center text-muted-foreground py-8">Carrito vacío</p>
                 ) : (
