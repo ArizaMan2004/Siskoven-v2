@@ -49,7 +49,7 @@ interface CartItem {
   kg?: number 
 }
 
-type PaymentMethod = "debit" | "cash" | "transfer" | "mixed" | "pagoMovil" | "zelle" | "binance"
+type PaymentMethod = "debit" | "cash" | "transfer" | "mixed" | "pagoMovil" | "zelle" | "binance" | "biopago" // AGREGADO: biopago
 
 // ==============================================
 // 🛑 Componente Principal
@@ -257,7 +257,7 @@ export default function SalesView() {
     const safeBcvRate = bcvRate > 0 ? bcvRate : 1;
     
     // Si el método de pago está en la lista de USD (cash, zelle, binance), usa el precio ajustado.
-    // Si no está (débito, transferencia, pago móvil, mixto), usa el precio completo.
+    // Si no está (débito, transferencia, pago móvil, mixto, biopago), usa el precio completo.
     const isUsingUsdPrice = USD_PAYMENT_METHODS.includes(paymentMethod);
     
     const priceUsdToUse = isUsingUsdPrice ? adjustedPrice : fullPrice;
@@ -287,7 +287,7 @@ export default function SalesView() {
           // Si paga en USD: usa el precio ajustado (almacenado en itemInCart.priceUsd)
           unitPriceToUse = itemInCart.priceUsd; 
       } else {
-          // Si paga en Bs: usa el precio completo sin descuento
+          // Si paga en Bs (incluyendo Biopago): usa el precio completo sin descuento
           unitPriceToUse = calculateFullBasePrice(product);
       }
       
@@ -528,7 +528,7 @@ export default function SalesView() {
               // PAGO EN USD: usa el precio ajustado/manual que está en item.priceUsd
               finalUnitUsd = item.priceUsd; 
           } else {
-              // PAGO EN BS: usa el precio completo/base
+              // PAGO EN BS (incluyendo Biopago): usa el precio completo/base
               finalUnitUsd = calculateFullBasePrice(product);
           }
 
@@ -569,6 +569,8 @@ export default function SalesView() {
       const newSaleRef = await addDoc(collection(db, "ventas"), saleData) 
 
       // 🔑 3. GENERAR PDF DE FACTURA
+      // COMENTADO: Desactivar la generación automática de PDF
+      /*
       const saleForPdf: Sale = {
           id: newSaleRef.id,
           createdAt: { toDate: () => new Date() }, 
@@ -592,6 +594,7 @@ export default function SalesView() {
       }
 
       generateInvoice(businessName, saleForPdf, businessInfo) 
+      */
 
       // 4. Actualizar Inventario 
       for (const item of cart) {
@@ -980,6 +983,7 @@ export default function SalesView() {
                       <option value="debit">Débito</option>
                       <option value="transfer">Transferencia Bancaria</option>
                       <option value="pagoMovil">Pago Móvil</option>
+                      <option value="biopago">Biopago</option> {/* AGREGADO */}
                       <option value="mixed">Mixto</option>
                     </select>
                   </div>

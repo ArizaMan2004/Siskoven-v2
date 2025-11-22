@@ -182,8 +182,9 @@ export default function ProductsView() {
   // 🚨 CORRECCIÓN: Aplicar Math.round() SOLO al precio final para guardar y mostrar.
   const roundedFinalSalePriceUsd = Math.round(finalSalePriceUsd);
   
-  // Paso 3: Precio de Venta Final en Bs (usando el precio USD redondeado)
-  const finalSalePriceBs = roundedFinalSalePriceUsd * bcvRate;
+  // Paso 3: Precio de Venta Final en Bs 
+  // 🎯 CORRECCIÓN APLICADA: Usamos el precio BASE (sin descuento/manual) para la conversión a Bs.
+  const finalSalePriceBs = basePriceUsd * bcvRate; 
   // ----------------------------------------------------
 
   // 💾 Guardar producto
@@ -561,7 +562,8 @@ export default function ProductsView() {
                         finalSalePriceUsd = Math.round(finalSalePriceUsd);
                     }
                     
-                    const finalSalePriceBs = finalSalePriceUsd * bcvRate;
+                    // 🎯 CORRECCIÓN APLICADA: Usamos el precio BASE (sin descuento/manual) para la conversión a Bs.
+                    const finalSalePriceBs = basePrice * bcvRate; 
                     
                     return (
                       <tr key={product.id} className="border-b border-border hover:bg-muted/50">
@@ -628,7 +630,8 @@ export default function ProductsView() {
                   finalSalePriceUsd = Math.round(finalSalePriceUsd);
               }
               
-              const finalSalePriceBs = finalSalePriceUsd * bcvRate;
+              // 🎯 CORRECCIÓN APLICADA: Usamos el precio BASE (sin descuento/manual) para la conversión a Bs.
+              const finalSalePriceBs = basePrice * bcvRate;
               
               return (
                 <Card key={product.id} className="border-l-4 border-l-primary">
