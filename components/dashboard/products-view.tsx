@@ -14,6 +14,9 @@ import { getCategories, addCategory } from "@/lib/categories-service"
 import BCVWidget from "./bcv-widget"
 import { motion } from "framer-motion" 
 
+// 🔑 CONSTANTE DE PAGINACIÓN
+const PRODUCTS_PER_PAGE = 10; 
+
 // 🧩 Interfaces y tipos
 interface Product {
   id: string
@@ -76,6 +79,8 @@ export default function ProductsView() {
   const [bcvRate, setBcvRate] = useState<number>(216.37)
   const [newCategoryName, setNewCategoryName] = useState("")
   const [showMobileSearch, setShowMobileSearch] = useState(false)
+  // 🔑 ESTADO DE PAGINACIÓN
+  const [currentPage, setCurrentPage] = useState(1) 
   const [formData, setFormData] = useState<FormData>({
     name: "",
     category: "",
@@ -151,7 +156,6 @@ export default function ProductsView() {
 
   // ----------------------------------------------------
   // LÓGICA: CÁLCULO DE PRECIOS PARA LA VISTA PREVIA DEL FORMULARIO
-  // (ACTUALIZADA: Implementando Precio Manual o Descuento 30% y REDONDEO)
   // ----------------------------------------------------
   const currentCostUsd = Number.parseFloat(formData.costUsd || "0");
   const currentProfit = Number.parseFloat(formData.profit || "0");
@@ -179,11 +183,11 @@ export default function ProductsView() {
       finalSalePriceUsd = basePriceUsd * (1 - 0.3); // 1 - (1 * 0.3) = 0.7
   }
 
-  // 🚨 CORRECCIÓN: Aplicar Math.round() SOLO al precio final para guardar y mostrar.
+  // 🚨 Aplicar Math.round() SOLO al precio final para guardar y mostrar.
   const roundedFinalSalePriceUsd = Math.round(finalSalePriceUsd);
   
   // Paso 3: Precio de Venta Final en Bs 
-  // 🎯 CORRECCIÓN APLICADA: Usamos el precio BASE (sin descuento/manual) para la conversión a Bs.
+  // 🎯 Usamos el precio BASE (sin descuento/manual) para la conversión a Bs.
   const finalSalePriceBs = basePriceUsd * bcvRate; 
   // ----------------------------------------------------
 
@@ -282,6 +286,34 @@ export default function ProductsView() {
     const matchesCategory = !selectedCategory || p.category === selectedCategory
     return matchesSearch && matchesCategory
   })
+
+  // 🔑 Lógica de PAGINACIÓN
+  const totalPages = Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE);
+  const indexOfLastProduct = currentPage * PRODUCTS_PER_PAGE;
+  const indexOfFirstProduct = indexOfLastProduct - PRODUCTS_PER_PAGE;
+  const paginatedProducts = filteredProducts.slice(indexOfFirstProduct, indexOfLastProduct);
+  
+  // 💡 MANEJADORES DE PAGINACIÓN
+  const goToPage = (pageNumber: number) => {
+    if (pageNumber >= 1 && pageNumber <= totalPages) {
+      setCurrentPage(pageNumber);
+    }
+  };
+  
+  // 🔑 EFECTO para resetear la página a 1 cuando cambian los filtros/búsqueda
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, selectedCategory]);
+
+  // 🔑 EFECTO para asegurar que la página actual sea válida si los productos filtrados disminuyen
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(totalPages);
+    } else if (totalPages === 0) {
+      setCurrentPage(1);
+    }
+  }, [totalPages, currentPage]);
+
 
   // 🧱 Render
   return (
@@ -489,8 +521,8 @@ export default function ProductsView() {
         </Card>
       )}
 
-      {/* Tabla - solo visible en desktop */}
-      <Card className="hidden md:block">
+      {/* Bloque de Búsqueda, Filtro y PAGINACIÓN */}
+      <Card>
         <CardHeader>
           <div className="flex flex-col sm:flex-row gap-2">
             <Input
@@ -513,94 +545,127 @@ export default function ProductsView() {
             </select>
           </div>
         </CardHeader>
-        <CardContent>
-          {loading ? (
-            <div className="text-center py-8">Cargando productos...</div>
-          ) : filteredProducts.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              {products.length === 0 ? "No hay productos. Crea uno para comenzar." : "No se encontraron productos."}
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border">
-                    <th className="text-left py-3 px-4">Producto</th>
-                    <th className="text-left py-3 px-4">Categoría</th>
-                    <th className="text-right py-3 px-4">Costo USD</th>
-                    
-                    {/* 🟢 NUEVA COLUMNA: Precio Base Calculado (sin redondeo) */}
-                    <th className="text-right py-3 px-4">Precio Base USD (BCV)</th> 
-                    
-                    {/* 🟢 MODIFICADO: Ahora muestra el precio de venta aplicado (redondeado) */}
-                    <th className="text-right py-3 px-4">Precio Venta FINAL USD</th> 
-                    
-                    <th className="text-right py-3 px-4">Precio Venta Bs</th>
-                    <th className="text-right py-3 px-4">Unidades Disponibles</th>
-                    <th className="text-left py-3 px-4">Tipo</th>
-                    <th className="text-center py-3 px-4">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredProducts.map((product) => {
-                    // CÁLCULOS ACTUALIZADOS (Implementando Precio Manual o Descuento 30%)
-                    const basePrice = calculateBaseSalePrice(product);
-                    let finalSalePriceUsd = basePrice;
-                    
-                    // Si hay un precio manual guardado, se usa ese precio (ya está redondeado en DB).
-                    if (product.salePriceUsdManual && product.salePriceUsdManual > 0) {
-                      finalSalePriceUsd = product.salePriceUsdManual;
-                    } 
-                    // Si no hay precio manual, aplica el descuento del 30% al precio base.
-                    else if (basePrice > 0) {
-                      finalSalePriceUsd = basePrice * (1 - 0.3);
-                    }
-                    
-                    // 🚨 CORRECCIÓN: Aplicar Math.round() SOLO si no viene de DB (para asegurar consistencia si el valor base tiene decimales)
-                    // Si viene de DB (product.salePriceUsdManual) ya fue guardado redondeado.
-                    if (!product.salePriceUsdManual || product.salePriceUsdManual <= 0) {
-                        finalSalePriceUsd = Math.round(finalSalePriceUsd);
-                    }
-                    
-                    // 🎯 CORRECCIÓN APLICADA: Usamos el precio BASE (sin descuento/manual) para la conversión a Bs.
-                    const finalSalePriceBs = basePrice * bcvRate; 
-                    
-                    return (
-                      <tr key={product.id} className="border-b border-border hover:bg-muted/50">
-                        <td className="py-3 px-4 font-medium">{product.name}</td>
-                        <td className="py-3 px-4">{product.category}</td>
-                        <td className="text-right py-3 px-4">${product.costUsd.toFixed(2)}</td>
-                        
-                        {/* 🟢 NUEVA CELDA: Precio Base USD (sin redondeo) */}
-                        <td className="text-right py-3 px-4 text-muted-foreground">${basePrice.toFixed(2)}</td>
-                        
-                        {/* 🟢 Precio de Venta FINAL USD (Manual o con Descuento, REDONDEADO) */}
-                        <td className="text-right py-3 px-4 font-semibold text-purple-600 dark:text-purple-400">${finalSalePriceUsd.toFixed(0)}</td>
-                        
-                        {/* Precio de Venta en Bs */}
-                        <td className="text-right py-3 px-4 font-semibold text-primary">Bs {finalSalePriceBs.toFixed(2)}</td>
-                        <td className="text-right py-3 px-4">{product.quantity}</td>
-                        <td className="py-3 px-4 capitalize">{product.saleType}</td>
-                        <td className="py-3 px-4">
-                          <div className="flex justify-center gap-2">
-                            <button onClick={() => handleEditProduct(product)} className="p-1 hover:bg-muted rounded">
-                              <Edit2 className="w-4 h-4 text-primary" />
-                            </button>
-                            <button
-                              onClick={() => handleDeleteProduct(product.id)}
-                              className="p-1 hover:bg-muted rounded"
-                            >
-                              <Trash2 className="w-4 h-4 text-destructive" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+        <CardContent className="pt-2">
+          {/* 🔑 CONTROLES DE PAGINACIÓN */}
+          {filteredProducts.length > 0 && (
+            <p className="text-sm text-gray-600 mb-4">{filteredProducts.length} producto(s) encontrado(s)</p>
           )}
+
+          {totalPages > 1 && (
+              <div className="flex justify-between items-center pt-3 border-t border-dashed">
+                  <Button 
+                      onClick={() => goToPage(currentPage - 1)}
+                      disabled={currentPage === 1}
+                      variant="outline"
+                      size="sm"
+                  >
+                      Página Anterior
+                  </Button>
+                  <span className="text-sm font-medium">
+                      Página {currentPage} de {totalPages}
+                  </span>
+                  <Button 
+                      onClick={() => goToPage(currentPage + 1)}
+                      disabled={currentPage === totalPages}
+                      variant="outline"
+                      size="sm"
+                  >
+                      Página Siguiente
+                  </Button>
+              </div>
+          )}
+
+          {/* Tabla - solo visible en desktop */}
+          <div className="hidden md:block mt-4">
+            {loading ? (
+              <div className="text-center py-8">Cargando productos...</div>
+            ) : paginatedProducts.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                {filteredProducts.length === 0 ? "No se encontraron productos con el filtro actual." : "No hay productos en esta página."}
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="text-left py-3 px-4">Producto</th>
+                      <th className="text-left py-3 px-4">Categoría</th>
+                      <th className="text-right py-3 px-4">Costo USD</th>
+                      
+                      {/* 🟢 NUEVA COLUMNA: Precio Base Calculado (sin redondeo) */}
+                      <th className="text-right py-3 px-4">Precio Base USD (BCV)</th> 
+                      
+                      {/* 🟢 MODIFICADO: Ahora muestra el precio de venta aplicado (redondeado) */}
+                      <th className="text-right py-3 px-4">Precio Venta FINAL USD</th> 
+                      
+                      <th className="text-right py-3 px-4">Precio Venta Bs</th>
+                      <th className="text-right py-3 px-4">Unidades Disponibles</th>
+                      <th className="text-left py-3 px-4">Tipo</th>
+                      <th className="text-center py-3 px-4">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {/* 🔑 Usando paginatedProducts */}
+                    {paginatedProducts.map((product) => {
+                      // CÁLCULOS ACTUALIZADOS (Implementando Precio Manual o Descuento 30%)
+                      const basePrice = calculateBaseSalePrice(product);
+                      let finalSalePriceUsd = basePrice;
+                      
+                      // Si hay un precio manual guardado, se usa ese precio (ya está redondeado en DB).
+                      if (product.salePriceUsdManual && product.salePriceUsdManual > 0) {
+                        finalSalePriceUsd = product.salePriceUsdManual;
+                      } 
+                      // Si no hay precio manual, aplica el descuento del 30% al precio base.
+                      else if (basePrice > 0) {
+                        finalSalePriceUsd = basePrice * (1 - 0.3);
+                      }
+                      
+                      // 🚨 Aplicar Math.round() SOLO si no viene de DB (para asegurar consistencia si el valor base tiene decimales)
+                      // Si viene de DB (product.salePriceUsdManual) ya fue guardado redondeado.
+                      if (!product.salePriceUsdManual || product.salePriceUsdManual <= 0) {
+                          finalSalePriceUsd = Math.round(finalSalePriceUsd);
+                      }
+                      
+                      // 🎯 CORRECCIÓN APLICADA: Usamos el precio BASE (sin descuento/manual) para la conversión a Bs.
+                      const finalSalePriceBs = basePrice * bcvRate; 
+                      
+                      return (
+                        <tr key={product.id} className="border-b border-border hover:bg-muted/50">
+                          <td className="py-3 px-4 font-medium">{product.name}</td>
+                          <td className="py-3 px-4">{product.category}</td>
+                          <td className="text-right py-3 px-4">${product.costUsd.toFixed(2)}</td>
+                          
+                          {/* 🟢 NUEVA CELDA: Precio Base USD (sin redondeo) */}
+                          <td className="text-right py-3 px-4 text-muted-foreground">${basePrice.toFixed(2)}</td>
+                          
+                          {/* 🟢 Precio de Venta FINAL USD (Manual o con Descuento, REDONDEADO) */}
+                          <td className="text-right py-3 px-4 font-semibold text-purple-600 dark:text-purple-400">${finalSalePriceUsd.toFixed(0)}</td>
+                          
+                          {/* Precio de Venta en Bs */}
+                          <td className="text-right py-3 px-4 font-semibold text-primary">Bs {finalSalePriceBs.toFixed(2)}</td>
+                          <td className="text-right py-3 px-4">{product.quantity}</td>
+                          <td className="py-3 px-4 capitalize">{product.saleType}</td>
+                          <td className="py-3 px-4">
+                            <div className="flex justify-center gap-2">
+                              <button onClick={() => handleEditProduct(product)} className="p-1 hover:bg-muted rounded">
+                                <Edit2 className="w-4 h-4 text-primary" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteProduct(product.id)}
+                                className="p-1 hover:bg-muted rounded"
+                              >
+                                <Trash2 className="w-4 h-4 text-destructive" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -608,13 +673,14 @@ export default function ProductsView() {
       <div className="md:hidden space-y-3">
         {loading ? (
           <div className="text-center py-8">Cargando productos...</div>
-        ) : filteredProducts.length === 0 ? (
+        ) : paginatedProducts.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground">
-            {products.length === 0 ? "No hay productos. Crea uno para comenzar." : "No se encontraron productos."}
+            {filteredProducts.length === 0 ? "No se encontraron productos con el filtro actual." : "No hay productos en esta página."}
           </div>
         ) : (
           <div className="space-y-3">
-            {filteredProducts.map((product) => {
+            {/* 🔑 Usando paginatedProducts */}
+            {paginatedProducts.map((product) => {
               // CÁLCULOS ACTUALIZADOS (Implementando Precio Manual o Descuento 30%)
               const basePrice = calculateBaseSalePrice(product);
               let finalSalePriceUsd = basePrice;
