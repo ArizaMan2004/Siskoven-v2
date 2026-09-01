@@ -53,8 +53,17 @@ interface FormData {
 export default function ProductsView() {
   const { user, allows, negocioId } = useAuth()
   // El cajero consulta el catálogo y el precio de venta, pero no ve a cuánto
-  // compras ni puede tocar el inventario. Ver el costo es el dato más sensible
-  // del negocio; el permiso se comprueba también en las reglas de Firestore.
+  // compras ni puede tocar el inventario.
+  //
+  // OJO: esto oculta el costo en la INTERFAZ, y nada más. Las reglas de
+  // Firestore autorizan documentos enteros, no campos sueltos: si el cajero
+  // puede leer un producto, la respuesta del servidor incluye `costUsd` y
+  // cualquiera puede verlo abriendo la pestaña de red del navegador. Está
+  // comprobado en tests/firestore-rules.test.mjs.
+  //
+  // Ocultarlo de verdad exige sacar el costo del documento: llevarlo a una
+  // colección aparte (productos_costos/{id}) legible solo por encargados.
+  // Mientras tanto, esto disuade pero no protege.
   const canSeeCosts = allows("costs.view")
   const canEdit = allows("products.edit")
   const [products, setProducts] = useState<Product[]>([])

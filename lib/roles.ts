@@ -59,6 +59,13 @@ export type Permission =
  *   cajero ve a cuánto compras, se lo lleva puesto el día que se vaya a
  *   trabajar con la competencia, o se lo cuenta a un cliente.
  *
+ *   PERO este permiso NO se puede respaldar con reglas de Firestore, porque
+ *   autorizan documentos enteros y no campos sueltos: el cajero necesita leer
+ *   el producto para venderlo, así que recibe `costUsd` en la respuesta aunque
+ *   la pantalla no lo pinte. Para esconderlo de verdad hay que mover el costo a
+ *   otra colección. Hasta entonces, `costs.view` disuade a un empleado normal
+ *   pero no detiene a uno que sepa abrir la consola del navegador.
+ *
  * · El cajero NO tiene `products.edit` ni `products.adjustStock`. Si falta
  *   mercancía, lo reporta; el ajuste lo hace el encargado y queda registrado.
  *   Un cajero que puede "cuadrar" el stock puede tapar un faltante.

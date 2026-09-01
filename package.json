@@ -6,7 +6,8 @@
     "build": "next build",
     "dev": "next dev",
     "lint": "eslint .",
-    "start": "next start"
+    "start": "next start",
+    "test:rules": "firebase emulators:exec --only firestore --project siskoven-rules-test \"node --test tests/firestore-rules.test.mjs\""
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -70,10 +71,12 @@
     "zod": "3.25.76"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@tailwindcss/postcss": "^4.1.9",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "firebase-tools": "^15.28.2",
     "postcss": "^8.5",
     "tailwindcss": "^4.1.9",
     "tw-animate-css": "1.3.3",

@@ -90,11 +90,15 @@ service cloud.firestore {
       return request.resource.data.negocioId == myNegocio();
     }
 
-    // Campos que no cambian entre la versión vieja y la nueva.
-    function unchanged(fields) {
-      return fields.toSet().hasOnly(
-        request.resource.data.diff(resource.data).unchangedKeys()
-      );
+    // Ninguno de estos campos se toca en esta escritura.
+    //
+    // Se comprueba con `affectedKeys().hasAny(...)`, que es el modismo probado
+    // de Firestore. La versión anterior usaba
+    // `fields.toSet().hasOnly(...unchangedKeys())` y reventaba al evaluarse:
+    // las pruebas del emulador lo cazaron: con ella, ningún usuario podía
+    // guardar sus propios ajustes.
+    function notChanging(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
     }
 
     // ------------------------------------------------------------------
@@ -127,7 +131,7 @@ service cloud.firestore {
       // navegador escribía plan:"complete" y se saltaba el pago.
       allow update: if signedIn()
                     && request.auth.uid == uid
-                    && unchanged(['role', 'plan', 'negocioId', 'trialEndsAt', 'isActive', 'exclusiveCode']);
+                    && notChanging(['role', 'plan', 'negocioId', 'trialEndsAt', 'subscriptionEndsAt', 'isActive', 'exclusiveCode']);
 
       // El dueño gestiona a su equipo, pero no puede crear otro dueño.
       allow update: if member() && isOwner() && mine(resource)
@@ -210,7 +214,7 @@ service cloud.firestore {
                     && resource.data.get('pendienteDeNumerar', false) == true
                     && request.resource.data.pendienteDeNumerar == false
                     && request.resource.data.correlativo is int
-                    && unchanged(['totalUsd', 'totalBs', 'items', 'cajeroUid', 'createdAt']);
+                    && notChanging(['totalUsd', 'totalBs', 'items', 'cajeroUid', 'createdAt']);
 
       allow delete: if false;
     }
