@@ -155,14 +155,53 @@ service cloud.firestore {
     }
 
     // ------------------------------------------------------------------
-    // productos · categorías
-    // El cajero LEE el catálogo pero no escribe nada: ni precios, ni stock.
+    // productos · costos · categorías
+    //
+    // El documento de producto NO contiene el costo ni el margen. Solo lleva
+    // lo que el cajero necesita para vender: nombre, categoría, existencias y
+    // precio de venta. El costo vive en productos_costos, que el cajero no
+    // puede leer.
+    //
+    // Esto es necesario porque las reglas de Firestore autorizan documentos
+    // ENTEROS, no campos sueltos: mientras el costo estuviera dentro del
+    // producto, cualquier cajero podía verlo en la respuesta del servidor
+    // aunque la pantalla no se lo mostrara. Separarlo es la única forma de que
+    // "el cajero no ve costos" pase de disuasión a garantía.
+    //
+    // El margen (`profit`) también se guarda aparte: con el precio y el margen
+    // se despeja el costo, así que dejarlo a la vista habría sido lo mismo que
+    // publicar el costo.
     // ------------------------------------------------------------------
     match /productos/{productoId} {
       allow read: if member() && mine(resource);
       allow create: if member() && isAdmin() && staysMine();
       allow update: if member() && isAdmin() && mine(resource) && staysMine();
+
+      // El cajero descuenta inventario al vender. Solo puede tocar `quantity`,
+      // solo hacia abajo y sin dejarlo en negativo: eso es vender. Subirlo
+      // sería ajustar stock, y ajustar stock es como se tapa un faltante.
+      allow update: if member() && mine(resource) && staysMine()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['quantity'])
+                    && request.resource.data.quantity < resource.data.quantity
+                    && request.resource.data.quantity >= 0;
+
       allow delete: if member() && isAdmin() && mine(resource);
+    }
+
+    // Costo y margen de cada producto. El identificador es el mismo que el del
+    // producto, para poder emparejarlos sin una consulta extra.
+    match /productos_costos/{productoId} {
+      allow read: if member() && isAdmin() && mine(resource);
+      allow write: if member() && isAdmin() && staysMine();
+    }
+
+    // Costo de la mercancía en el momento de cada venta, que es lo que permite
+    // calcular la utilidad y la reposición. El cajero lo ESCRIBE al vender
+    // (necesita dejar constancia) pero no puede leerlo después.
+    match /ventas_costos/{ventaId} {
+      allow read: if member() && isAdmin() && mine(resource);
+      allow create: if member() && staysMine();
+      allow update, delete: if false;
     }
 
     match /categorias/{categoriaId} {

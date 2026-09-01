@@ -66,20 +66,46 @@ export default function CapitalizationCard({ dateFrom, dateTo }: CapitalizationC
     try {
       const negocio = negocioId ?? user.uid
 
-      const [ventasSnap, productosSnap] = await Promise.all([
+      const [ventasSnap, costosSnap, costosVentaSnap] = await Promise.all([
         getDocs(query(collection(db, "ventas"), where("negocioId", "==", negocio))),
-        getDocs(query(collection(db, "productos"), where("negocioId", "==", negocio))),
+        // El costo de HOY vive en su propia colección, que solo pueden leer
+        // encargados y dueños. Ver lib/products-service.ts.
+        getDocs(query(collection(db, "productos_costos"), where("negocioId", "==", negocio))),
+        // El costo que tenía la mercancía CUANDO se vendió.
+        getDocs(query(collection(db, "ventas_costos"), where("negocioId", "==", negocio))),
       ])
 
-      // El costo de HOY de cada producto: es la mitad de la comparación.
       const currentCosts: CurrentCosts = new Map()
-      for (const document of productosSnap.docs) {
+      for (const document of costosSnap.docs) {
         const costo = Number(document.data().costUsd)
         if (Number.isFinite(costo) && costo > 0) currentCosts.set(document.id, costo)
       }
 
+      // Las líneas con su costo histórico, emparejadas por id de venta.
+      const costosPorVenta = new Map<string, Array<Record<string, unknown>>>()
+      for (const document of costosVentaSnap.docs) {
+        const items = document.data().items
+        if (Array.isArray(items)) costosPorVenta.set(document.id, items)
+      }
+
       const sales = ventasSnap.docs
-        .map((document) => document.data())
+        .map((document) => {
+          const venta = document.data()
+          const costos = costosPorVenta.get(document.id)
+          if (!costos) return venta
+
+          // Se reconstruye cada línea con su costo, que es lo que necesita el
+          // análisis. La venta en sí nunca lo lleva dentro.
+          const porProducto = new Map(costos.map((linea) => [linea.productId, linea]))
+          return {
+            ...venta,
+            items: (venta.items ?? []).map((item: Record<string, unknown>) => ({
+              ...item,
+              costUsdUnit:
+                Number((porProducto.get(item.productId) as { costUsdUnit?: number })?.costUsdUnit) || 0,
+            })),
+          }
+        })
         .filter((venta) => {
           const fecha = venta.createdAt?.toDate?.()
           if (!fecha) return false

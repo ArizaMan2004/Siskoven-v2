@@ -12,6 +12,7 @@ import { Trash2, Plus, Minus, Scan, ShoppingCart, Search, UserSearch, X } from "
 import { initBarcodeScanner } from "@/lib/barcode-scanner"
 import { useRates } from "@/hooks/use-rates"
 import { getTurnoAbierto } from "@/lib/cash-service"
+import { loadProducts as fetchCatalogo } from "@/lib/products-service"
 import { reportFirestoreError, reportFirestoreSuccess } from "@/lib/sync-status"
 import { createNumberedDocument, isOfflineError, unnumbered } from "@/lib/document-numbers"
 import { usePricingSettings } from "@/hooks/use-pricing-settings"
@@ -40,12 +41,13 @@ interface Product {
   id: string
   name: string
   category: string
-  costUsd: number
   quantity: number
-  profit: number
-  saleType: "unit" | "weight" 
+  saleType: "unit" | "weight"
   barcode?: string
-  salePriceUsdManual?: number 
+  /** Precio de lista, ya calculado al guardar el producto. */
+  precioUsd?: number | null
+  /** Precio en divisa con el ajuste del comercio aplicado. */
+  precioDivisaUsd?: number | null
 }
 
 interface CartItem {
@@ -146,19 +148,15 @@ export default function SalesView() {
     if (!user) return
     setLoading(true)
     try {
-      const q = query(collection(db, "productos"), where("negocioId", "==", negocioId ?? user.uid))
-      const querySnapshot = await getDocs(q)
-      const productsData = querySnapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(), 
-      })) as Product[]
-      setProducts(productsData)
+      // Catálogo público: nombre, existencias y precio ya calculado. El costo
+      // vive en otra colección que el cajero no puede leer.
+      setProducts((await fetchCatalogo(negocioId ?? user.uid)) as unknown as Product[])
     } catch (error) {
       console.error("Error loading products:", error)
     } finally {
       setLoading(false)
     }
-  }, [user])
+  }, [user, negocioId])
   
   useEffect(() => {
     if (!user) return
@@ -701,7 +699,8 @@ export default function SalesView() {
       // 🔑 2. REGISTRO DE VENTA
       
       // Las líneas ya vienen con el precio correcto para este método de pago.
-      // Se guarda también el costo, para poder calcular la ganancia real luego.
+      // El costo NO va aquí: viaja en ventas_costos, que el cajero escribe
+      // pero no puede leer.
       const itemsForSale = cartLines.map(({ product, ...line }) => ({
           productId: line.productId,
           name: line.name,
@@ -714,7 +713,6 @@ export default function SalesView() {
           priceUsd: line.unitUsd,
           totalUsdLine: line.lineUsd,
           priceBs: line.lineBs,
-          costUsdUnit: product ? Number(product.costUsd) || 0 : 0,
       }));
 
       const saleData: any = {
@@ -777,12 +775,37 @@ export default function SalesView() {
       // un número provisional: uno que después cambia es peor que ninguno.
       let numeroAsignado: string | null = null
 
+      // Costo de la mercancía en el momento de la venta, para poder calcular
+      // después la utilidad y la reposición. Va en su propio documento porque
+      // el cajero puede leer sus propias ventas, y si el costo estuviera
+      // dentro le llegaría en la respuesta.
+      const costoVenta = (ventaId: string) => [
+        {
+          coleccion: "ventas_costos",
+          id: ventaId,
+          data: {
+            negocioId: negocioId ?? user.uid,
+            ventaId,
+            createdAt: Timestamp.now(),
+            items: cartLines.map((line) => ({
+              productId: line.productId,
+              quantity: line.quantity,
+              // El costo se toma del catálogo con costos si quien vende puede
+              // verlo; si es un cajero, queda en 0 y lo completa el encargado.
+              costUsdUnit: Number((line.product as { costUsd?: number } | undefined)?.costUsd) || 0,
+              priceUsdUnit: line.unitUsd,
+            })),
+          },
+        },
+      ]
+
       try {
         const creada = await createNumberedDocument({
           negocioId: negocioId ?? user.uid,
           tipo: "nota_entrega",
           coleccion: "ventas",
           buildData: (numeracion) => ({ ...saleData, ...numeracion }),
+          extraDocs: costoVenta,
         })
         numeroAsignado = creada.numeroDocumento
       } catch (error) {

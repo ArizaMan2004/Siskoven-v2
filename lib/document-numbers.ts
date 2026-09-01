@@ -109,6 +109,14 @@ export async function createNumberedDocument(params: {
   tipo: DocumentType
   coleccion: string
   buildData: (numeracion: NumberedWrite) => Record<string, unknown>
+  /**
+   * Documentos que deben escribirse junto al principal, en la misma
+   * transacción. Se usa para el costo de la venta, que va en una colección
+   * aparte: si se escribiera después y fallara, quedaría una venta sin costo y
+   * los reportes de utilidad saldrían mal sin que nadie se enterase.
+   * Reciben el id del documento creado.
+   */
+  extraDocs?: (documentId: string) => Array<{ coleccion: string; id: string; data: Record<string, unknown> }>
   firestore?: Firestore
 }): Promise<{ id: string; numeroDocumento: string; correlativo: number }> {
   const database = params.firestore ?? db
@@ -141,6 +149,10 @@ export async function createNumberedDocument(params: {
         pendienteDeNumerar: false,
       }),
     )
+
+    for (const extra of params.extraDocs?.(documentRef.id) ?? []) {
+      transaction.set(doc(database, extra.coleccion, extra.id), extra.data)
+    }
 
     return { correlativo: siguiente, numeroDocumento }
   })

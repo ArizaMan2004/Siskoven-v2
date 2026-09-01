@@ -90,20 +90,28 @@ before(async () => {
       subscriptionEndsAt: dentroDeUnAno,
     })
 
+    // El producto público NO lleva costo ni margen: solo lo que hace falta
+    // para venderlo.
     await setDoc(doc(db, "productos", "producto-a"), {
       negocioId: NEGOCIO_A,
       name: "Harina",
-      costUsd: 1.2,
       quantity: 50,
+      precioUsd: 1.6,
+      precioDivisaUsd: 1.5,
+    })
+
+    await setDoc(doc(db, "productos_costos", "producto-a"), {
+      negocioId: NEGOCIO_A,
+      productoId: "producto-a",
+      costUsd: 1.2,
       profit: 25,
     })
 
     await setDoc(doc(db, "productos", "producto-b"), {
       negocioId: NEGOCIO_B,
       name: "Café",
-      costUsd: 3,
       quantity: 10,
-      profit: 30,
+      precioUsd: 4.3,
     })
 
     await setDoc(doc(db, "ventas", "venta-cajero"), {
@@ -459,21 +467,85 @@ describe("Auditoría y movimientos de caja son inmutables", () => {
 })
 
 // ---------------------------------------------------------------------------
-// LO QUE LAS REGLAS **NO** PUEDEN HACER
-//
-// Este bloque no comprueba que algo esté protegido, sino que documenta un
-// límite real de Firestore: las reglas autorizan documentos ENTEROS, no campos
-// sueltos. Si un cajero puede leer un producto, recibe también su costo.
-// ---------------------------------------------------------------------------
 
-describe("Límite conocido: las reglas no ocultan campos", () => {
-  it("el cajero recibe el costo del producto aunque la interfaz no se lo muestre", async () => {
+describe("El costo está fuera del alcance del cajero", () => {
+  it("el cajero NO puede leer el costo de un producto", async () => {
+    await assertFails(getDoc(doc(ctx(CAJERO_A), "productos_costos", "producto-a")))
+  })
+
+  it("el cajero NO puede listar los costos del negocio", async () => {
+    await assertFails(
+      getDocs(query(collection(ctx(CAJERO_A), "productos_costos"), where("negocioId", "==", NEGOCIO_A))),
+    )
+  })
+
+  it("el producto que SÍ lee el cajero no trae el costo dentro", async () => {
     const snap = await getDoc(doc(ctx(CAJERO_A), "productos", "producto-a"))
     assert.equal(snap.exists(), true)
-    assert.equal(
-      typeof snap.data().costUsd,
-      "number",
-      "Si esto falla es que el costo se movió fuera del documento y el límite ya no aplica",
+    assert.equal(snap.data().costUsd, undefined, "El costo se coló en el documento público")
+    assert.equal(snap.data().profit, undefined, "El margen permite despejar el costo")
+    assert.equal(typeof snap.data().precioUsd, "number", "El cajero necesita el precio para vender")
+  })
+
+  it("el encargado SÍ puede leer el costo", async () => {
+    await assertSucceeds(getDoc(doc(ctx(DUENO_A), "productos_costos", "producto-a")))
+  })
+
+  it("el cajero NO puede escribir un costo", async () => {
+    await assertFails(
+      setDoc(doc(ctx(CAJERO_A), "productos_costos", "producto-a"), {
+        negocioId: NEGOCIO_A,
+        costUsd: 0.01,
+      }),
+    )
+  })
+
+  it("el costo de una venta se escribe pero no se lee de vuelta", async () => {
+    await assertSucceeds(
+      setDoc(doc(ctx(CAJERO_A), "ventas_costos", "venta-nueva"), {
+        negocioId: NEGOCIO_A,
+        ventaId: "venta-nueva",
+        items: [{ productId: "producto-a", quantity: 1, costUsdUnit: 1.2 }],
+        createdAt: new Date(),
+      }),
+    )
+
+    await assertFails(getDoc(doc(ctx(CAJERO_A), "ventas_costos", "venta-nueva")))
+    await assertSucceeds(getDoc(doc(ctx(DUENO_A), "ventas_costos", "venta-nueva")))
+  })
+})
+
+describe("El cajero descuenta inventario al vender", () => {
+  // Producto propio de esta suite: usar el compartido hacía que el resultado
+  // dependiera de qué prueba hubiera corrido antes y cómo dejara el stock.
+  const PRODUCTO = "producto-stock"
+
+  before(async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), "productos", PRODUCTO), {
+        negocioId: NEGOCIO_A,
+        name: "Azúcar",
+        quantity: 100,
+        precioUsd: 2,
+      })
+    })
+  })
+
+  it("puede bajar las existencias", async () => {
+    await assertSucceeds(updateDoc(doc(ctx(CAJERO_A), "productos", PRODUCTO), { quantity: 99 }))
+  })
+
+  it("NO puede subirlas: eso sería ajustar stock", async () => {
+    await assertFails(updateDoc(doc(ctx(CAJERO_A), "productos", PRODUCTO), { quantity: 999 }))
+  })
+
+  it("NO puede dejarlas en negativo", async () => {
+    await assertFails(updateDoc(doc(ctx(CAJERO_A), "productos", PRODUCTO), { quantity: -5 }))
+  })
+
+  it("NO puede aprovechar para cambiar el precio", async () => {
+    await assertFails(
+      updateDoc(doc(ctx(CAJERO_A), "productos", PRODUCTO), { quantity: 98, precioUsd: 0.01 }),
     )
   })
 })

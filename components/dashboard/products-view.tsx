@@ -3,7 +3,12 @@
 import { useState, useEffect, type FormEvent } from "react"
 import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/firebase"
-import { collection, query, where, getDocs, addDoc, updateDoc, deleteDoc, doc, Timestamp } from "firebase/firestore"
+import {
+  type ProductWithCost,
+  deleteProduct,
+  loadProductsWithCosts,
+  saveProduct,
+} from "@/lib/products-service"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -21,19 +26,9 @@ import { m } from "framer-motion"
 // 🔑 CONSTANTE DE PAGINACIÓN
 const PRODUCTS_PER_PAGE = 10; 
 
-// 🧩 Interfaces y tipos
-interface Product {
-  id: string
-  name: string
-  category: string
-  costUsd: number
-  quantity: number
-  profit: number
-  saleType: "unit" | "weight"
-  barcode?: string
-  /** Precio de venta fijado a mano. Null = se calcula por margen. */
-  salePriceUsdManual?: number | null
-}
+// El producto y su costo viven en documentos separados; el servicio los junta
+// cuando quien mira tiene permiso para ver costos. Ver lib/products-service.ts.
+type Product = ProductWithCost
 
 // Interfaz simplificada
 interface FormData {
@@ -114,15 +109,10 @@ export default function ProductsView() {
     if (!user) return
     setLoading(true)
     try {
-      const q = query(collection(db, "productos"), where("negocioId", "==", negocioId ?? user.uid))
-      const snapshot = await getDocs(q)
-      const productsData = snapshot.docs.map((d) => ({
-        id: d.id,
-        ...d.data(),
-      })) as Product[]
-      setProducts(productsData)
+      setProducts(await loadProductsWithCosts(negocioId ?? user.uid))
     } catch (error) {
       console.error("Error loading products:", error)
+      reportFirestoreError(error)
     } finally {
       setLoading(false)
     }
@@ -188,31 +178,24 @@ export default function ProductsView() {
       const hasManualPrice =
         formData.salePriceUsdManual.trim().length > 0 && Number.isFinite(manualPrice) && manualPrice > 0
 
-      const productData: Record<string, unknown> = {
-        // userId se conserva por compatibilidad; negocioId es el que usan las
-        // reglas de seguridad y el que permite que varias personas compartan
-        // el mismo inventario.
-        userId: user.uid,
+      // El servicio escribe los dos documentos en un lote: el producto público
+      // (con el precio ya calculado) y el costo, que el cajero no puede leer.
+      await saveProduct({
         negocioId: negocioId ?? user.uid,
-        name: formData.name.trim(),
-        category: formData.category,
-        costUsd,
-        quantity,
-        profit: Number.isFinite(profit) ? profit : 0,
-        saleType: formData.saleType,
-        barcode: formData.barcode.trim(),
-        createdAt: Timestamp.now(),
-      }
-
-      // Firestore rechaza `undefined`: el campo se omite o se limpia a null,
-      // pero nunca se manda sin valor (antes eso reventaba el guardado).
-      productData.salePriceUsdManual = hasManualPrice ? manualPrice : null
-
-      if (editingId) {
-        await updateDoc(doc(db, "productos", editingId), productData)
-      } else {
-        await addDoc(collection(db, "productos"), productData)
-      }
+        productId: editingId,
+        pricing,
+        input: {
+          name: formData.name.trim(),
+          category: formData.category,
+          quantity,
+          saleType: formData.saleType,
+          barcode: formData.barcode.trim(),
+          costUsd,
+          profit: Number.isFinite(profit) ? profit : 0,
+          // Firestore rechaza `undefined`: se manda null, nunca sin valor.
+          salePriceUsdManual: hasManualPrice ? manualPrice : null,
+        },
+      })
 
       reportFirestoreSuccess()
       resetForm()
@@ -245,9 +228,11 @@ export default function ProductsView() {
     setFormData({
       name: product.name,
       category: product.category,
-      costUsd: product.costUsd.toString(),
+      // Un cajero no llega aquí (no puede editar), pero si llegara no tendría
+      // el costo: se deja vacío en vez de reventar.
+      costUsd: product.costUsd?.toString() ?? "",
       quantity: product.quantity.toString(),
-      profit: product.profit.toString(),
+      profit: product.profit?.toString() ?? "",
       saleType: product.saleType,
       barcode: product.barcode || "",
       // 🟢 NUEVO: Cargar el precio manual al editar
@@ -260,10 +245,13 @@ export default function ProductsView() {
   const handleDeleteProduct = async (id: string) => {
     if (!confirm("¿Eliminar producto?")) return
     try {
-      await deleteDoc(doc(db, "productos", id))
+      // Borra el producto y su costo a la vez: dejar el costo huérfano
+      // ensuciaría los reportes de reposición.
+      await deleteProduct(id)
       loadProducts()
     } catch (error) {
       console.error("Error deleting product:", error)
+      reportFirestoreError(error)
     }
   }
 
@@ -565,7 +553,7 @@ export default function ProductsView() {
                     <tr className="border-b border-border">
                       <th className="text-left py-3 px-4">Producto</th>
                       <th className="text-left py-3 px-4">Categoría</th>
-                      <th className="text-right py-3 px-4">Costo</th>
+                      {canSeeCosts && <th className="text-right py-3 px-4">Costo</th>}
                       
                       {/* 🟢 NUEVA COLUMNA: Precio Base Calculado (sin redondeo) */}
                       <th className="text-right py-3 px-4">Precio de lista</th> 
@@ -591,7 +579,11 @@ export default function ProductsView() {
                         <tr key={product.id} className="border-b border-border hover:bg-muted/50">
                           <td className="py-3 px-4 font-medium">{product.name}</td>
                           <td className="py-3 px-4">{product.category}</td>
-                          <td className="text-right py-3 px-4">{formatMoney(product.costUsd)}</td>
+                          {canSeeCosts && (
+                            <td className="text-right py-3 px-4 tabular-nums">
+                              {formatMoney(product.costUsd ?? 0)}
+                            </td>
+                          )}
 
                           <td className="text-right py-3 px-4 text-muted-foreground tabular-nums">
                             {formatMoney(basePrice)}
@@ -655,10 +647,12 @@ export default function ProductsView() {
                     </div>
 
                     <div className="grid grid-cols-2 gap-3 text-sm">
-                      <div>
-                        <p className="text-muted-foreground text-xs">Costo</p>
-                        <p className="font-medium tabular-nums">{formatMoney(product.costUsd)}</p>
-                      </div>
+                      {canSeeCosts && (
+                        <div>
+                          <p className="text-muted-foreground text-xs">Costo</p>
+                          <p className="font-medium tabular-nums">{formatMoney(product.costUsd ?? 0)}</p>
+                        </div>
+                      )}
 
                       <div>
                         <p className="text-muted-foreground text-xs">Precio de lista</p>

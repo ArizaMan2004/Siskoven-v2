@@ -10,9 +10,18 @@
 // salen del mismo precio final que ves en divisa.
 
 export interface PriceableProduct {
-  costUsd: number
+  /**
+   * Precio ya calculado y guardado en el documento del producto.
+   *
+   * Manda sobre todo lo demás. Existe porque el costo vive en otra colección
+   * que el cajero no puede leer: si el precio se dedujera del costo, el cajero
+   * no podría saber a cuánto vender. Ver lib/products-service.ts.
+   */
+  precioUsd?: number | null
+  /** Costo. Solo lo tiene quien puede leer productos_costos. */
+  costUsd?: number
   /** Margen sobre la venta. Se acepta 20 o 0.2 indistintamente. */
-  profit: number
+  profit?: number
   /** Precio de venta fijado a mano. Si está, manda sobre el margen. */
   salePriceUsdManual?: number | null
 }
@@ -114,6 +123,10 @@ export function roundTo(value: number, step: number, mode: RoundingMode = "neare
  * el margen aplicado. Sin descuentos ni redondeos.
  */
 export function listPrice(product: PriceableProduct): number {
+  // 1º el precio guardado: es lo único que tiene el cajero.
+  const guardado = Number(product?.precioUsd)
+  if (Number.isFinite(guardado) && guardado > 0) return guardado
+
   const manual = Number(product?.salePriceUsdManual)
   if (Number.isFinite(manual) && manual > 0) return manual
 
@@ -134,7 +147,16 @@ export function listPrice(product: PriceableProduct): number {
  * que el comercio haya configurado. Con los ajustes por defecto (0% y sin
  * redondeo) devuelve exactamente el precio de lista.
  */
-export function divisaPrice(product: PriceableProduct, settings: PricingSettings): number {
+export function divisaPrice(
+  product: PriceableProduct & { precioDivisaUsd?: number | null },
+  settings: PricingSettings,
+): number {
+  // Si el producto trae su precio en divisa ya resuelto, se respeta: se
+  // calculó al guardarlo, con estos mismos ajustes, y quien lo lee puede no
+  // tener el costo para recalcularlo.
+  const guardado = Number(product?.precioDivisaUsd)
+  if (Number.isFinite(guardado) && guardado > 0) return guardado
+
   const base = listPrice(product)
   if (base <= 0) return 0
 
