@@ -5,7 +5,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/firebase"
-import { collection, query, where, getDocs, doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore"
+import { collection, query, where, getDocs, doc, getDoc, setDoc } from "firebase/firestore"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input" 
@@ -13,20 +13,35 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table" 
 // Importaciones de iconos y animación
 import { FileText, Download, Settings, Upload, Loader2, RefreshCw, Tag, DollarSign, Euro, ChevronLeft, ChevronRight } from "lucide-react" // 🔑 Añadidos ChevronLeft/Right para paginación
-import { motion } from "framer-motion"
+import { m } from "framer-motion"
+import PendingNumbersCard from "./pending-numbers-card"
 // import { toast } from "sonner" 
 
 // 🔑 IMPORTACIÓN FUNCIONAL
 import { generateInventoryReport, generateInvoice, generateProductLabels, BusinessInfo, Sale as SaleInterface } from "@/lib/pdf-generator" 
-// 🔑 NUEVAS IMPORTACIONES: Funciones de servicio BCV
-import { getBCVRate, fetchBCVRateFromAPI } from "@/lib/bcv-service" 
+import { useRates } from "@/hooks/use-rates"
 
+
+/**
+ * Fecha en formato YYYY-MM-DD según la hora LOCAL del comercio.
+ * `toISOString()` convierte a UTC: en Venezuela (UTC-4) una venta de las 21:00
+ * se contaba como del día siguiente y descuadraba el cierre diario.
+ */
+function toLocalDateKey(date?: Date | null): string {
+  if (!date || Number.isNaN(date.getTime())) return ""
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
 
 // Componente Select personalizado para estilo
-const Select = ({ children, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) => (
-    <select 
-        {...props} 
-        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+const Select = ({ children, className, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) => (
+    <select
+        {...props}
+        // El className recibido va DESPUÉS: antes se pisaba y los anchos
+        // (w-1/4, w-1/3) de los selectores de prefijo no se aplicaban nunca.
+        className={`flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${className ?? ""}`}
     >
         {children}
     </select>
@@ -139,7 +154,7 @@ interface Product {
 interface Sale extends SaleInterface {
     items: any[]; 
     createdAt: { toDate: () => Date };
-    paymentMethod?: string;
+    paymentMethod: string;
     paymentMethodDescription?: string; 
     totalUsd: number;
     totalBs: number;
@@ -214,7 +229,7 @@ const BusinessConfigModal = ({
 
     return (
         <div className={`fixed inset-0 z-50 bg-black/50 flex justify-center items-center backdrop-blur-sm`}>
-            <div className className="bg-background rounded-xl shadow-2xl border border-border w-11/12 md:w-3/4 max-w-3xl max-h-[90vh] overflow-y-auto">
+            <div className="bg-background rounded-xl shadow-2xl border border-border w-11/12 md:w-3/4 max-w-3xl max-h-[90vh] overflow-y-auto">
               
                 <div className="p-6">
                     <h3 className="text-2xl font-bold mb-4 border-b pb-2">Configuración Fiscal y Bancaria</h3>
@@ -375,7 +390,7 @@ const getDisplayPaymentMethod = (sale: Sale): string => {
 
 
 export default function ReportsView() {
-  const { user } = useAuth()
+  const { user, negocioId } = useAuth()
   const [products, setProducts] = useState<Product[]>([])
   const [sales, setSales] = useState<Sale[]>([])
   const [businessName, setBusinessName] = useState(defaultBusinessInfo.businessName) 
@@ -390,9 +405,9 @@ export default function ReportsView() {
   const [currentPage, setCurrentPage] = useState(1);
   const salesPerPage = 10; // Ventas por página
   
-  // Estado que contiene la tasa BCV real
-  const [currentBcvRate, setCurrentBcvRate] = useState<number>(0) 
-  // 🔑 NUEVO ESTADO: Para el loader del botón de actualización de la tasa
+  // La tasa viene del store compartido: la misma que ve la caja.
+  const { rate: currentBcvRate, refresh: refreshRate, loading: rateLoading } = useRates()
+  // Se sigue usando como indicador de carga del logo.
   const [rateIsUpdating, setRateIsUpdating] = useState(false) 
   
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false); 
@@ -419,27 +434,8 @@ export default function ReportsView() {
     }
   }, [user])
   
-  // 🔑 FUNCIÓN: Actualización manual de la tasa BCV
   const handleRefreshRate = async () => {
-    setRateIsUpdating(true);
-    try {
-        const newRateData = await fetchBCVRateFromAPI(); 
-        
-        if (newRateData && newRateData.rate > 0) {
-            setCurrentBcvRate(newRateData.rate);
-            // toast.success(`Tasa BCV actualizada a Bs. ${newRateData.rate.toFixed(2)}`); 
-            alert(`Tasa BCV actualizada a Bs. ${newRateData.rate.toFixed(2)}`); 
-        } else {
-            // toast.error("Error al obtener la tasa BCV. Intenta de nuevo."); 
-            alert("Error al obtener la tasa BCV. Intenta de nuevo.");
-        }
-    } catch (error) {
-        console.error("Error fetching BCV rate:", error);
-        // toast.error("Error de conexión al actualizar la tasa BCV."); 
-        alert("Error de conexión al actualizar la tasa BCV.");
-    } finally {
-        setRateIsUpdating(false);
-    }
+    await refreshRate()
   }
 
 
@@ -509,17 +505,13 @@ export default function ReportsView() {
       setBusinessInfo(finalBusinessInfo);
       setFormInfo(loadedBusinessInfo); 
 
-      // 🔑 CARGAR TASA INICIAL DEL SERVICIO (si está disponible)
-      const initialRateData = getBCVRate();
-      setCurrentBcvRate(initialRateData.rate || 0);
-
       // Cargar Productos y Ventas (filtradas por userId)
-      const productsQuery = query(collection(db, "productos"), where("userId", "==", user.uid))
+      const productsQuery = query(collection(db, "productos"), where("negocioId", "==", negocioId ?? user.uid))
       const productsSnapshot = await getDocs(productsQuery)
       const productsData = productsSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data(), })) as Product[]
       setProducts(productsData)
 
-      const salesQuery = query(collection(db, "ventas"), where("userId", "==", user.uid))
+      const salesQuery = query(collection(db, "ventas"), where("negocioId", "==", negocioId ?? user.uid))
       const salesSnapshot = await getDocs(salesQuery)
       
       const salesData = salesSnapshot.docs.map((doc) => {
@@ -537,8 +529,9 @@ export default function ReportsView() {
         }
       }) as Sale[]
       
-      // @ts-ignore: se asume que createdAt existe y tiene la función toDate()
-      const sortedSales = salesData.sort((a, b) => b.createdAt.toDate().getTime() - a.createdAt.toDate().getTime())
+      const sortedSales = salesData.sort(
+        (a, b) => (b.createdAt?.toDate?.()?.getTime() ?? 0) - (a.createdAt?.toDate?.()?.getTime() ?? 0),
+      )
       setSales(sortedSales)
 
     } catch (error) {
@@ -629,7 +622,8 @@ export default function ReportsView() {
 
     try {
       const userDocRef = doc(db, "usuarios", user.uid);
-      await updateDoc(userDocRef, dataToSave);
+      // setDoc + merge: updateDoc falla si el documento aún no existe.
+      await setDoc(userDocRef, dataToSave, { merge: true });
       
       setBusinessName(dataToSave.businessName);
       setBusinessInfo(prev => ({ 
@@ -651,8 +645,8 @@ export default function ReportsView() {
 
 
   const handleGenerateInventoryReport = async () => {
-    if (currentBcvRate === 0) {
-        alert("La tasa BCV no se ha cargado correctamente.");
+    if (!currentBcvRate) {
+        alert("No hay tasa de cambio cargada. Actualízala antes de generar el reporte.");
         return;
     }
     setIsGenerating(true);
@@ -667,8 +661,8 @@ export default function ReportsView() {
   }
 
   const handleGenerateLabels = async () => {
-    if (currentBcvRate === 0) {
-        alert("La tasa BCV no se ha cargado correctamente.");
+    if (!currentBcvRate) {
+        alert("No hay tasa de cambio cargada. Actualízala antes de generar las etiquetas.");
         return;
     }
     setIsGenerating(true);
@@ -704,8 +698,7 @@ export default function ReportsView() {
   const filteredSales = sales
     // 1. Filtrado por fecha y método
     .filter((sale) => {
-      // @ts-ignore: createdAt existe y tiene toDate()
-      const saleDate = sale.createdAt.toDate().toISOString().split("T")[0] 
+      const saleDate = toLocalDateKey(sale.createdAt?.toDate?.())
       const matchesFrom = !dateFrom || saleDate >= dateFrom
       const matchesTo = !dateTo || saleDate <= dateTo
       
@@ -715,11 +708,9 @@ export default function ReportsView() {
     })
     // 2. Ordenamiento: Más reciente primero (DESCENDENTE)
     .sort((a, b) => {
-      // @ts-ignore: createdAt existe y tiene toDate()
-      const dateA = a.createdAt.toDate().getTime();
-      // @ts-ignore: createdAt existe y tiene toDate()
-      const dateB = b.createdAt.toDate().getTime();
-      return dateB - dateA; // Ordenamiento de más reciente a más antigua
+      const dateA = a.createdAt?.toDate?.()?.getTime() ?? 0
+      const dateB = b.createdAt?.toDate?.()?.getTime() ?? 0
+      return dateB - dateA // más reciente primero
     });
   
   // 3. LÓGICA DE PAGINACIÓN
@@ -741,12 +732,15 @@ export default function ReportsView() {
   }
 
   return (
-    <motion.div
+    <m.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, ease: "easeOut" }}
       className="p-4 md:p-8 space-y-8"
     >
+      {/* Ventas guardadas sin conexión que aún esperan su correlativo. */}
+      <PendingNumbersCard />
+
       {/* MODAL DE CONFIGURACIÓN */}
       <BusinessConfigModal 
           isConfigModalOpen={isConfigModalOpen}
@@ -809,25 +803,29 @@ export default function ReportsView() {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-2">
         
         {/* Card 1: Tasa de Cambio BCV */}
-        <Card className={`shadow-lg border ${currentBcvRate > 0 ? "border-green-300" : "border-red-300"}`}>
+        <Card className="shadow-lg">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Tasa BCV del Día</CardTitle>
-                <Button 
-                    onClick={handleRefreshRate} 
-                    size="icon" 
-                    variant="ghost" 
-                    title="Actualizar Tasa BCV"
-                    disabled={rateIsUpdating}
+                <CardTitle className="text-sm font-medium">Tasa de cambio</CardTitle>
+                <Button
+                    onClick={handleRefreshRate}
+                    size="icon"
+                    variant="ghost"
+                    title="Actualizar tasa"
+                    disabled={rateLoading}
                 >
-                    <RefreshCw className={`w-4 h-4 text-muted-foreground transition-all ${rateIsUpdating ? "animate-spin text-primary" : "hover:text-primary"}`} />
+                    <RefreshCw className={`w-4 h-4 text-muted-foreground transition-all ${rateLoading ? "animate-spin text-primary" : "hover:text-primary"}`} />
                 </Button>
             </CardHeader>
             <CardContent>
-                <div className="text-2xl font-bold text-primary">
-                    {currentBcvRate > 0 ? `Bs ${currentBcvRate.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "Cargando..."}
+                <div className="text-2xl font-bold tabular-nums text-primary">
+                    {currentBcvRate
+                      ? `Bs ${currentBcvRate.toLocaleString("es-VE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                      : rateLoading
+                        ? "Cargando…"
+                        : "Sin tasa"}
                 </div>
-                <p className={`text-xs ${currentBcvRate > 0 ? "text-green-600" : "text-red-500"} mt-1`}>
-                    {currentBcvRate > 0 ? "Última Tasa Operativa" : "Tasa no cargada. Actualiza."}
+                <p className="mt-1 text-xs text-muted-foreground">
+                    {currentBcvRate ? "Tasa en uso ahora mismo" : "Pulsa actualizar para traerla"}
                 </p>
             </CardContent>
         </Card>
@@ -1047,6 +1045,6 @@ export default function ReportsView() {
           )}
         </CardContent>
       </Card>
-    </motion.div>
+    </m.div>
   )
 }

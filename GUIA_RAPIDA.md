@@ -1,4 +1,4 @@
-# Guía Rápida - Venko
+# Guía Rápida - Siskoven
 
 ## Instalación Rápida (5 minutos)
 

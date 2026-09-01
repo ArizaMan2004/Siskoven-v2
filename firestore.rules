@@ -1,0 +1,327 @@
+rules_version = '2';
+
+// ============================================================================
+// REGLAS DE SEGURIDAD DE SISKOVEN
+// ============================================================================
+//
+// Esta es la autorización DE VERDAD. Lo que hay en lib/roles.ts solo decide qué
+// botones se dibujan; cualquiera puede abrir la consola del navegador y llamar
+// a Firestore directamente. Lo único que lo detiene es este archivo, porque se
+// ejecuta en los servidores de Google.
+//
+// Modelo de datos: cada documento lleva `negocioId`. Una persona solo ve los
+// documentos de su negocio, y lo que puede hacer con ellos depende de su rol,
+// que se lee de usuarios/{uid}. El rol NO viaja en la petición: se consulta en
+// la base, para que nadie pueda declararse dueño desde el cliente.
+//
+// Desplegar con:  firebase deploy --only firestore:rules
+// Probar con:     firebase emulators:start --only firestore
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ------------------------------------------------------------------
+    // Ayudantes
+    // ------------------------------------------------------------------
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // El correo verificado es requisito: el registro manda un correo de
+    // verificación y hasta que no se confirma, la cuenta no toca datos.
+    function verified() {
+      return signedIn() && request.auth.token.email_verified == true;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data;
+    }
+
+    function myNegocio() {
+      // Sin negocio explícito, el negocio es la propia cuenta: así una cuenta
+      // de un solo dueño funciona sin configurar nada.
+      return userDoc().get('negocioId', request.auth.uid);
+    }
+
+    // Ante la ausencia de rol se asume el más restrictivo.
+    function myRole() {
+      return userDoc().get('role', 'cashier');
+    }
+
+    // Super-administrador: tú, el dueño del SaaS. No es un rol dentro de un
+    // negocio, es una lista aparte. El documento superAdmins/{uid} solo se crea
+    // desde la consola de Firebase: ninguna regla permite escribir ahí, así que
+    // nadie puede ascenderse a sí mismo ni aunque se salte todo lo demás.
+    function isSuperAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/superAdmins/$(request.auth.uid));
+    }
+
+    function isOwner() { return myRole() == 'owner'; }
+    function isAdmin() { return myRole() in ['owner', 'admin']; }
+    function isCashier() { return myRole() == 'cashier'; }
+
+    // La cuenta tiene que estar activa y sin vencer.
+    //
+    // `subscriptionEndsAt` manda sobre `trialEndsAt`: cuando alguien paga, su
+    // suscripción sustituye a la prueba aunque el campo viejo siga ahí. Si no
+    // hay ninguna de las dos fechas se deja pasar, para no dejar fuera a una
+    // cuenta creada antes de que existiera este campo.
+    function subscriptionActive() {
+      let u = userDoc();
+      let vence = u.get('subscriptionEndsAt', u.get('trialEndsAt', null));
+      return u.get('isActive', true) == true
+        && (vence == null || vence > request.time);
+    }
+
+    function member() {
+      return verified() && subscriptionActive();
+    }
+
+    // El documento pertenece a mi negocio (lectura).
+    function mine(resource) {
+      return resource.data.get('negocioId', resource.data.get('userId', '')) == myNegocio();
+    }
+
+    // El documento que se está escribiendo se queda en mi negocio: impide
+    // "mudar" un producto al negocio de otro.
+    function staysMine() {
+      return request.resource.data.negocioId == myNegocio();
+    }
+
+    // Campos que no cambian entre la versión vieja y la nueva.
+    function unchanged(fields) {
+      return fields.toSet().hasOnly(
+        request.resource.data.diff(resource.data).unchangedKeys()
+      );
+    }
+
+    // ------------------------------------------------------------------
+    // usuarios
+    // ------------------------------------------------------------------
+    match /usuarios/{uid} {
+      // Cada quien lee lo suyo; el dueño lee el de su equipo; el super-admin
+      // lee todas, que es lo que hace posible el panel de administración.
+      allow read: if signedIn()
+                  && (request.auth.uid == uid || (isOwner() && mine(resource)) || isSuperAdmin());
+
+      // Alta: solo tu propio documento y solo como dueño DE TU PROPIO negocio
+      // (negocioId == tu uid). Eso es inofensivo: ser dueño de un negocio en el
+      // que estás solo no da acceso a nada ajeno.
+      //
+      // Lo que sí se bloquea es entrar como dueño del negocio de OTRO, y
+      // regalarse el plan completo: el plan lo asigna una Cloud Function tras
+      // validar el código. Ahí estaba el agujero — el navegador escribía
+      // plan:"complete" y se saltaba el pago.
+      //
+      // A los empleados los crea el dueño con la regla de abajo.
+      allow create: if signedIn()
+                    && request.auth.uid == uid
+                    && request.resource.data.get('role', 'owner') == 'owner'
+                    && request.resource.data.get('negocioId', uid) == uid
+                    && request.resource.data.get('plan', 'trial') == 'trial';
+
+      // Cada quien edita sus preferencias, pero jamás su rol, su plan, su
+      // negocio ni la fecha de fin de prueba. Ahí estaba el agujero: el
+      // navegador escribía plan:"complete" y se saltaba el pago.
+      allow update: if signedIn()
+                    && request.auth.uid == uid
+                    && unchanged(['role', 'plan', 'negocioId', 'trialEndsAt', 'isActive', 'exclusiveCode']);
+
+      // El dueño gestiona a su equipo, pero no puede crear otro dueño.
+      allow update: if member() && isOwner() && mine(resource)
+                    && request.resource.data.role in ['admin', 'cashier'];
+
+      // El super-admin activa cuentas y mueve vencimientos: es lo único que
+      // hace falta para cobrar suscripciones a mano.
+      allow update: if isSuperAdmin();
+
+      allow delete: if false; // las cuentas se desactivan, no se borran
+    }
+
+    // ------------------------------------------------------------------
+    // negocios
+    // ------------------------------------------------------------------
+    match /negocios/{negocioId} {
+      allow read: if member() && negocioId == myNegocio();
+      allow create: if member() && request.resource.data.ownerUid == request.auth.uid;
+      allow update: if member() && isAdmin() && negocioId == myNegocio();
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // productos · categorías
+    // El cajero LEE el catálogo pero no escribe nada: ni precios, ni stock.
+    // ------------------------------------------------------------------
+    match /productos/{productoId} {
+      allow read: if member() && mine(resource);
+      allow create: if member() && isAdmin() && staysMine();
+      allow update: if member() && isAdmin() && mine(resource) && staysMine();
+      allow delete: if member() && isAdmin() && mine(resource);
+    }
+
+    match /categorias/{categoriaId} {
+      allow read: if member() && mine(resource);
+      allow write: if member() && isAdmin() && staysMine();
+    }
+
+    // ------------------------------------------------------------------
+    // clientes
+    // El cajero sí puede registrar un cliente nuevo en plena venta, pero no
+    // borrarlo.
+    // ------------------------------------------------------------------
+    match /clientes/{clienteId} {
+      allow read: if member() && mine(resource);
+      allow create: if member() && staysMine();
+      allow update: if member() && mine(resource) && staysMine();
+      allow delete: if member() && isAdmin() && mine(resource);
+    }
+
+    // ------------------------------------------------------------------
+    // ventas
+    //
+    // Una venta NO se borra y NO se reescribe. Si hubo un error se anula:
+    // se marca `anulada` con motivo y autor, y queda el rastro de las dos
+    // cosas. Un historial que se puede editar no es un historial.
+    // ------------------------------------------------------------------
+    match /ventas/{ventaId} {
+      allow read: if member() && mine(resource)
+                  // El cajero solo ve sus propias ventas; el encargado, todas.
+                  && (isAdmin() || resource.data.get('cajeroUid', '') == request.auth.uid);
+
+      allow create: if member()
+                    && staysMine()
+                    && request.resource.data.cajeroUid == request.auth.uid
+                    && request.resource.data.get('anulada', false) == false;
+
+      // Lo único editable es la anulación, y solo una vez.
+      allow update: if member() && mine(resource)
+                    && resource.data.get('anulada', false) == false
+                    && request.resource.data.anulada == true
+                    && request.resource.data.anuladaPor == request.auth.uid
+                    && request.resource.data.motivoAnulacion is string
+                    && request.resource.data.motivoAnulacion.size() >= 3;
+
+      // …y asignarle su correlativo a una venta que se guardó sin conexión.
+      // Solo se permite pasar de "pendiente" a "numerada", nunca al revés ni
+      // cambiar un número ya emitido.
+      allow update: if member() && mine(resource)
+                    && resource.data.get('pendienteDeNumerar', false) == true
+                    && request.resource.data.pendienteDeNumerar == false
+                    && request.resource.data.correlativo is int
+                    && unchanged(['totalUsd', 'totalBs', 'items', 'cajeroUid', 'createdAt']);
+
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // contadores de documentos
+    //
+    // Guardan el último correlativo emitido por negocio y tipo. Solo se pueden
+    // tocar dentro de una transacción que además escriba el documento, pero eso
+    // no se puede exigir desde aquí: las reglas ven cada escritura por separado.
+    //
+    // Lo que sí se exige, y es lo que importa: el contador solo SUBE, y de uno
+    // en uno. Con esto, aunque alguien intente manipularlo desde la consola del
+    // navegador, no puede retroceder la serie para reutilizar un número ni
+    // saltarse tramos para tapar un documento.
+    // ------------------------------------------------------------------
+    match /contadores/{contadorId} {
+      allow read: if member() && resource.data.negocioId == myNegocio();
+
+      allow create: if member() && staysMine()
+                    && request.resource.data.ultimo == 1;
+
+      allow update: if member() && mine(resource) && staysMine()
+                    && request.resource.data.ultimo == resource.data.ultimo + 1;
+
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // turnos de caja
+    // ------------------------------------------------------------------
+    match /turnos/{turnoId} {
+      allow read: if member() && mine(resource)
+                  && (isAdmin() || resource.data.get('cajeroUid', '') == request.auth.uid);
+
+      allow create: if member()
+                    && staysMine()
+                    && request.resource.data.cajeroUid == request.auth.uid
+                    && request.resource.data.estado == 'abierto';
+
+      // Cierra su propio turno; el encargado puede cerrar el de cualquiera
+      // (para cuando el cajero se fue sin cerrar).
+      allow update: if member() && mine(resource)
+                    && resource.data.estado == 'abierto'
+                    && (isAdmin() || resource.data.cajeroUid == request.auth.uid);
+
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // movimientos de caja (entradas y salidas que no son ventas)
+    // ------------------------------------------------------------------
+    match /movimientos_caja/{movimientoId} {
+      allow read: if member() && mine(resource);
+      allow create: if member() && staysMine()
+                    && request.resource.data.creadoPor == request.auth.uid;
+      allow update, delete: if false; // un movimiento de caja no se retoca
+    }
+
+    // ------------------------------------------------------------------
+    // auditoría
+    // Se escribe y no se toca nunca más. Ni el dueño puede reescribirla:
+    // una bitácora editable no sirve para auditar a nadie.
+    // ------------------------------------------------------------------
+    match /auditoria/{registroId} {
+      allow read: if member() && isAdmin() && mine(resource);
+      allow create: if member() && staysMine()
+                    && request.resource.data.actorUid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // superAdmins
+    //
+    // Solo lectura, y solo de tu propia entrada: sirve para que la aplicación
+    // sepa si mostrarte el panel. Crear o borrar entradas se hace únicamente
+    // desde la consola de Firebase.
+    // ------------------------------------------------------------------
+    match /superAdmins/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // pagos de suscripción
+    //
+    // El comercio puede ver sus propios pagos (su historial de facturación);
+    // registrarlos es exclusivo del super-admin. No se editan ni se borran:
+    // un recibo que se puede cambiar después no es un recibo.
+    // ------------------------------------------------------------------
+    match /pagos/{pagoId} {
+      allow read: if isSuperAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow create: if isSuperAdmin() && request.resource.data.registradoPor == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // códigos de registro
+    //
+    // Cerrado por completo al cliente. Antes el navegador leía la colección
+    // para validar el código y luego lo marcaba como usado: cualquiera podía
+    // listar los códigos válidos o marcar el suyo sin gastarlo.
+    // Se valida desde una Cloud Function con el SDK de administrador.
+    // ------------------------------------------------------------------
+    match /admin_codes/{codigo} {
+      allow read, write: if false;
+    }
+
+    // Todo lo que no esté contemplado arriba queda denegado.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -193,29 +193,17 @@ export default function LoginForm() {
     }
 
     try {
-      // 1. Validar el código solo si el plan es 'complete'
-      if (selectedPlan === 'complete') {
-        if (!exclusiveCode.trim()) {
-          setError("Debes ingresar el código exclusivo de registro para el plan completo")
-          setLoading(false)
-          return
-        }
-
-        const codeRef = doc(db, "admin_codes", exclusiveCode.trim())
-        const codeDoc = await getDoc(codeRef)
-        if (!codeDoc.exists()) {
-          setError("Código exclusivo no válido o inexistente.")
-          setLoading(false)
-          return
-        }
-
-        const codeData = codeDoc.data()
-        if (codeData.used) {
-          setError("Este código ya ha sido utilizado.")
-          setLoading(false)
-          return
-        }
-        // Marcar el código como usado (se hace después de crear el usuario)
+      // 1. Con plan completo solo se comprueba que el código venga escrito.
+      //
+      // La validación de verdad ya NO se hace aquí. Antes el navegador leía la
+      // colección admin_codes para comprobar el código: eso permitía a
+      // cualquiera listar todos los códigos válidos del sistema. Ahora la
+      // colección está cerrada al cliente en firestore.rules y el código lo
+      // canjea el servidor.
+      if (selectedPlan === 'complete' && !exclusiveCode.trim()) {
+        setError("Debes ingresar el código exclusivo de registro para el plan completo")
+        setLoading(false)
+        return
       }
 
 
@@ -231,18 +219,27 @@ export default function LoginForm() {
         businessName,
         createdAt: new Date(),
         emailVerified: false,
-        plan: selectedPlan, // <-- Usar el plan seleccionado
+        // Quien se registra abre su propio negocio y es su dueño. El negocio
+        // es su propio uid: a partir de ahí puede invitar encargados y cajeros,
+        // que compartirán este mismo negocioId.
+        negocioId: userCredential.user.uid,
+        role: "owner",
+        // El plan SIEMPRE arranca en prueba. Antes se guardaba aquí el plan
+        // elegido en el formulario, así que cualquiera se regalaba el plan
+        // completo. Ahora el ascenso lo hace el servidor tras validar el
+        // código, y las reglas de Firestore rechazan cualquier otra cosa.
+        plan: "trial",
         isActive: true,
       };
 
-      if (selectedPlan === 'trial') {
-        // Añadir lógica específica para la prueba de 7 días
-        userData.trialEndsAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); 
-      } else if (selectedPlan === 'complete') {
-        // Añadir lógica específica para el plan completo
-        userData.exclusiveCode = exclusiveCode;
-        // Marcar el código como usado en Firestore
-        await setDoc(doc(db, "admin_codes", exclusiveCode.trim()), { used: true, usedBy: userCredential.user.uid, usedAt: new Date() }, { merge: true })
+      // Todas las cuentas nacen con 7 días de prueba.
+      userData.trialEndsAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+      if (selectedPlan === 'complete') {
+        // El código se guarda para que el servidor lo canjee y suba el plan.
+        // Marcarlo como usado desde aquí era el otro agujero: el navegador
+        // podía leer la lista de códigos válidos y quemar el suyo sin pagar.
+        userData.codigoPendiente = exclusiveCode.trim();
       }
 
 
@@ -257,7 +254,10 @@ export default function LoginForm() {
           alert("¡IMPORTANTE! Acabas de crear tu cuenta de prueba. Revisa tu correo electrónico para verificar tu cuenta y poder iniciar sesión. ¡Asegúrate de revisar la carpeta de SPAM!");
           setSuccessMessage("¡Cuenta de prueba creada! Revisa tu correo electrónico (incluyendo spam) para verificar tu cuenta e iniciar sesión. ¡Tienes 7 días de prueba!")
       } else {
-          setSuccessMessage("¡Cuenta creada! Revisa tu correo electrónico para verificar tu cuenta e iniciar sesión.")
+          setSuccessMessage(
+            "¡Cuenta creada! Revisa tu correo para verificar la cuenta. Tu código quedó registrado: " +
+              "en cuanto lo validemos, la cuenta pasa al plan completo. Mientras tanto entras con los 7 días de prueba.",
+          )
       }
 
       // Vuelve a la vista de login

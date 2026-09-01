@@ -1,6 +1,10 @@
 import { initializeApp } from "firebase/app"
 import { getAuth } from "firebase/auth"
-import { getFirestore } from "firebase/firestore"
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+} from "firebase/firestore"
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -13,4 +17,31 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig)
 export const auth = getAuth(app)
-export const db = getFirestore(app)
+
+/**
+ * Firestore con caché persistente en disco.
+ *
+ * Esto es lo que hace que una caja no pierda ventas cuando se va la luz, se cae
+ * el internet o se agota la cuota diaria del proyecto:
+ *
+ * · Las escrituras que no se pueden enviar quedan en una cola guardada en el
+ *   navegador (IndexedDB). Sobrevive a recargar la página y a cerrar el
+ *   navegador, y se envía sola en cuanto se puede.
+ * · Las lecturas se sirven de la copia local, así que el inventario se sigue
+ *   consultando sin conexión.
+ * · La cuota diaria de Firestore se reinicia cada medianoche (hora del
+ *   Pacífico), así que lo que quedó en cola sube en la siguiente jornada.
+ *
+ * `persistentMultipleTabManager` permite varias pestañas abiertas compartiendo
+ * la misma caché. Sin él, la segunda pestaña se queda sin persistencia, y ahí
+ * sí se perderían escrituras.
+ *
+ * La única forma de perder la cola es borrar los datos del navegador o no
+ * volver a abrir la aplicación nunca. Por eso el aviso en pantalla insiste en
+ * no cerrar sesión mientras haya algo pendiente.
+ */
+export const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({
+    tabManager: persistentMultipleTabManager(),
+  }),
+})

@@ -3,24 +3,35 @@
 import { useTheme } from "next-themes"
 import { Moon, Sun } from "lucide-react"
 import { useEffect, useState } from "react"
+import { Button } from "@/components/ui/button"
 
 export function ThemeToggle() {
-  const { theme, setTheme } = useTheme()
+  // resolvedTheme, no theme: con la preferencia del sistema activada `theme`
+  // vale "system", así que comparar con "dark" siempre daba falso y el botón
+  // mostraba el icono equivocado.
+  const { resolvedTheme, setTheme } = useTheme()
   const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
     setMounted(true)
   }, [])
 
-  if (!mounted) return null
+  // Hasta montar no se conoce el tema real; se reserva el hueco para que la
+  // cabecera no dé un salto cuando aparece el botón.
+  if (!mounted) return <div className="size-9" aria-hidden />
+
+  const isDark = resolvedTheme === "dark"
 
   return (
-    <button
-      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-      className="p-2 rounded-lg bg-muted hover:bg-muted/80 transition-colors"
-      aria-label="Cambiar tema"
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={() => setTheme(isDark ? "light" : "dark")}
+      aria-label={isDark ? "Cambiar a tema claro" : "Cambiar a tema oscuro"}
     >
-      {theme === "dark" ? <Sun className="w-5 h-5 text-yellow-500" /> : <Moon className="w-5 h-5 text-slate-700" />}
-    </button>
+      {/* El icono hereda el color del texto: antes era slate-700 fijo y sobre
+          el fondo oscuro quedaba invisible. */}
+      {isDark ? <Sun className="size-5" /> : <Moon className="size-5" />}
+    </Button>
   )
 }

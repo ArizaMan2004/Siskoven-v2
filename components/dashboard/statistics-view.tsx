@@ -21,13 +21,14 @@ import {
   Pie,
   Cell,
 } from "recharts"
-import { motion } from "framer-motion"
+import { m } from "framer-motion"
+import CapitalizationCard from "./capitalization-card"
 
 // 🔑 COMPONENTE SELECT BÁSICO (Para consistencia visual)
-const Select = ({ children, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) => (
-    <select 
-        {...props} 
-        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+const Select = ({ children, className, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) => (
+    <select
+        {...props}
+        className={`flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${className ?? ""}`}
     >
         {children}
     </select>
@@ -54,6 +55,26 @@ interface Sale {
 // Función de utilidad para conversión segura
 const safeFloat = (value: any): number => {
   return Number.parseFloat(String(value)) || 0
+}
+
+/** Fecha de la venta, tolerando documentos sin `createdAt`. */
+const saleDateOf = (sale: { createdAt?: any }): Date | null => {
+  const raw = sale?.createdAt
+  if (!raw) return null
+  const date = typeof raw?.toDate === "function" ? raw.toDate() : new Date(raw)
+  return Number.isNaN(date?.getTime?.()) ? null : date
+}
+
+/**
+ * Clave YYYY-MM-DD en hora LOCAL. Con `toISOString()` (UTC) las ventas de la
+ * tarde en Venezuela se contaban en el día siguiente.
+ */
+const toLocalDateKey = (date: Date | null): string => {
+  if (!date) return ""
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
 }
 
 // 🔑 FUNCIÓN AUXILIAR DE VISUALIZACIÓN
@@ -93,7 +114,7 @@ const PAYMENT_METHODS = [
 
 
 export default function StatisticsView() {
-  const { user } = useAuth()
+  const { user, negocioId } = useAuth()
   const [sales, setSales] = useState<Sale[]>([])
   const [loading, setLoading] = useState(true)
   const [dateFrom, setDateFrom] = useState("")
@@ -115,7 +136,7 @@ export default function StatisticsView() {
     if (!user) return
     setLoading(true)
     try {
-      const salesQuery = query(collection(db, "ventas"), where("userId", "==", user.uid))
+      const salesQuery = query(collection(db, "ventas"), where("negocioId", "==", negocioId ?? user.uid))
       const salesSnapshot = await getDocs(salesQuery)
       
       const salesData = salesSnapshot.docs.map((doc) => {
@@ -141,7 +162,7 @@ export default function StatisticsView() {
   const filteredSales = sales
     // 1. Filtrado por fecha y método
     .filter((sale) => {
-      const saleDate = sale.createdAt.toDate().toISOString().split("T")[0]
+      const saleDate = toLocalDateKey(saleDateOf(sale))
       const matchesFrom = !dateFrom || saleDate >= dateFrom
       const matchesTo = !dateTo || saleDate <= dateTo
       
@@ -150,12 +171,7 @@ export default function StatisticsView() {
       return matchesFrom && matchesTo && matchesMethod
     })
     // 2. Ordenamiento: Más reciente primero (DESCENDENTE)
-    .sort((a, b) => {
-      // Orden descendente (más reciente primero)
-      const dateA = a.createdAt.toDate().getTime();
-      const dateB = b.createdAt.toDate().getTime();
-      return dateB - dateA; // Esta resta garantiza el ordenamiento de más reciente a más antigua
-    });
+    .sort((a, b) => (saleDateOf(b)?.getTime() ?? 0) - (saleDateOf(a)?.getTime() ?? 0));
   
   // 🔑 LÓGICA DE PAGINACIÓN
   const indexOfLastSale = currentPage * salesPerPage;
@@ -171,26 +187,28 @@ export default function StatisticsView() {
 
   // 📊 Datos para el Gráfico de Barras: Ventas Diarias (Usa filteredSales, pero necesita ordenarse por fecha para el gráfico)
   const salesByDay = filteredSales.reduce((acc, sale) => {
-    const date = sale.createdAt.toDate().toLocaleDateString("es-VE", {
-      day: "2-digit",
-      month: "2-digit",
-    })
-    if (!acc[date]) {
-      acc[date] = { date, totalUsd: 0, totalBs: 0 }
+    const date = saleDateOf(sale)
+    const key = toLocalDateKey(date)
+    if (!key) return acc
+
+    if (!acc[key]) {
+      acc[key] = {
+        key,
+        date: date!.toLocaleDateString("es-VE", { day: "2-digit", month: "2-digit" }),
+        totalUsd: 0,
+        totalBs: 0,
+      }
     }
-    acc[date].totalUsd += sale.totalUsd
-    acc[date].totalBs += sale.totalBs
+    acc[key].totalUsd += sale.totalUsd
+    acc[key].totalBs += sale.totalBs
     return acc
-  }, {} as Record<string, { date: string; totalUsd: number; totalBs: number }>)
+  }, {} as Record<string, { key: string; date: string; totalUsd: number; totalBs: number }>)
 
   // El gráfico de barras necesita que sus datos estén ordenados ascendentemente (más antiguo primero) para que se muestre correctamente en el eje X.
-  const barChartData = Object.values(salesByDay).sort(
-    (a, b) => {
-        const dateA = new Date(a.date.split("/").reverse().join("-")).getTime(); // Convierte DD/MM a MM/DD para parsear
-        const dateB = new Date(b.date.split("/").reverse().join("-")).getTime();
-        return dateA - dateB; // Orden ascendente
-    }
-  )
+  // Se ordena por la clave YYYY-MM-DD, que es ordenable como texto. Antes se
+  // reconstruía una fecha a partir de "DD/MM" sin año y salía Invalid Date, así
+  // que el gráfico mostraba los días en cualquier orden.
+  const barChartData = Object.values(salesByDay).sort((a, b) => a.key.localeCompare(b.key))
 
   // 📊 Datos para el Gráfico de Torta: Métodos de Pago (Usa filteredSales)
   const salesByPaymentMethod = filteredSales.reduce((acc, sale) => {
@@ -216,7 +234,7 @@ export default function StatisticsView() {
   }
 
   return (
-    <motion.div
+    <m.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, ease: "easeOut" }}
@@ -226,6 +244,10 @@ export default function StatisticsView() {
         <h2 className="text-2xl md:text-3xl font-bold text-foreground mb-2 md:mb-4">Estadísticas de Ventas</h2>
         <p className="text-sm md:text-base text-muted-foreground">Análisis de rendimiento de tu negocio.</p>
       </div>
+
+      {/* La pregunta que de verdad importa, antes que cualquier gráfico:
+          ¿lo que ganaste alcanza para reponer lo que vendiste? */}
+      <CapitalizationCard dateFrom={dateFrom} dateTo={dateTo} />
 
       {/* 🔑 CONTROLES DE FILTRO (Fecha y Método de Pago) */}
       <div className="flex flex-col md:flex-row gap-4 mb-6">
@@ -330,7 +352,9 @@ export default function StatisticsView() {
                     cy="50%"
                     outerRadius={80}
                     fill="#8884d8"
-                    label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                    label={({ name, percent }: { name?: string; percent?: number }) =>
+                      `${name ?? ""} (${((percent ?? 0) * 100).toFixed(0)}%)`
+                    }
                   >
                     {pieChartData.map((_entry, index) => (
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
@@ -369,7 +393,7 @@ export default function StatisticsView() {
                     {currentSalesForTable.map((sale) => (
                       <tr key={sale.id} className="border-b border-border hover:bg-muted/50">
                         <td className="py-3 px-4">
-                          {new Date(sale.createdAt.toDate()).toLocaleDateString("es-VE")}
+                          {saleDateOf(sale)?.toLocaleDateString("es-VE") ?? "sin fecha"}
                         </td>
                         <td className="text-right py-3 px-4">{sale.items.length}</td>
                         <td className="text-right py-3 px-4">
@@ -415,6 +439,6 @@ export default function StatisticsView() {
           </Card>
         </div>
       )}
-    </motion.div>
+    </m.div>
   )
 }

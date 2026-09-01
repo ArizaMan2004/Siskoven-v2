@@ -14,9 +14,11 @@ const pwaConfig = withPWA({
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Configuración de Next.js
+  // Los errores de tipos vuelven a romper el build a propósito: estaban
+  // ocultando bugs reales (entre ellos un className duplicado en el modal de
+  // configuración fiscal y varios precios mal tipados).
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false,
   },
   images: {
     unoptimized: true,

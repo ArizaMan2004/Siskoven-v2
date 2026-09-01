@@ -9,10 +9,12 @@ import JsBarcode from 'jsbarcode';
 // ==============================================
 // 🎨 CONFIGURACIÓN GENERAL (COLORES Y ESTILOS)
 // ==============================================
-const PRIMARY_COLOR = [79, 53, 248]        
-const LIGHT_ROW = [245, 245, 250]          
-const CARD_TEXT = [50, 50, 50]             
-const HEADER_DARK = [44, 52, 60]           
+type RGB = [number, number, number]
+
+const PRIMARY_COLOR: RGB = [79, 53, 248]
+const LIGHT_ROW: RGB = [245, 245, 250]
+const CARD_TEXT: RGB = [50, 50, 50]
+const HEADER_DARK: RGB = [44, 52, 60]
 const PRECIO_M2 = 15 
 // Tasa de IVA establecida al 16% (Mantenida por si se usa en otro lugar, pero ignorada en este script)
 const IVA_RATE = 0.16; 
@@ -36,7 +38,10 @@ export interface SaleItem {
   productId: string
   name: string
   quantity: number
-  priceUsd: number
+  /** Precio unitario. `priceUsd` es el nombre histórico del campo. */
+  priceUsd?: number
+  priceUsdUnit?: number
+  totalUsdLine?: number
 }
 
 // Interfaz Sale (ajustada para el DB)
@@ -260,14 +265,14 @@ export function generateInventoryReport(products: Product[], businessInfo: Busin
     head: [["Producto", "Categoría", "Cantidad", "Costo (USD)", "Precio USD", "Precio Bs"]],
     body: tableData,
     styles: { fontSize: 9, cellPadding: 3, lineColor: 0, lineWidth: 0.1 },
-    headStyles: { fillColor: HEADER_DARK, textColor: 255, fontStyle: "bold" },
+    headStyles: { fillColor: HEADER_DARK, textColor: 255, fontStyle: "bold" as const },
     alternateRowStyles: { fillColor: LIGHT_ROW },
     margin: { left: MARGIN_LEFT, right: 14 },
     columnStyles: {
-        2: { halign: 'center' },
-        3: { halign: 'right' },
-        4: { halign: 'right' },
-        5: { halign: 'right' },
+        2: { halign: 'center' as const },
+        3: { halign: 'right' as const },
+        4: { halign: 'right' as const },
+        5: { halign: 'right' as const },
     }
   })
 
@@ -334,9 +339,12 @@ export function generateInvoice(
   
   const dateStr = invoiceDate.toLocaleDateString("es-VE"); 
   
-  const invoiceNumber = sale.id 
-    ? sale.id.substring(0, 6).toUpperCase() 
-    : "N/A"; 
+  // El número correlativo real. Antes se usaban los primeros 6 caracteres del
+  // ID de Firestore: aleatorio, con saltos y sin forma de demostrar que no
+  // falta ninguno. Las ventas viejas y las guardadas sin conexión no lo tienen.
+  const invoiceNumber =
+    (sale as any).numeroDocumento ??
+    ((sale as any).pendienteDeNumerar ? "PENDIENTE DE NUMERAR" : sale.id?.substring(0, 6).toUpperCase() ?? "N/A")
 
   // Coordenadas base
   const MARGIN_LEFT = 14
@@ -399,7 +407,7 @@ export function generateInvoice(
   // -----------------------------------------------------
   const INFO_Y_START = 45
   
-  const clientInfo = sale.clientInfo || {}; 
+  const clientInfo = sale.clientInfo ?? { name: "", document: "", address: "", phone: "" }
   const clientName = clientInfo.name || "Consumidor Final";
   const clientDocument = clientInfo.document || "V-00000000";
   const clientAddress = clientInfo.address || "N/A";
@@ -440,10 +448,9 @@ export function generateInvoice(
   const TABLE_START_Y = INFO_Y_START + LINE_HEIGHT * 6 
 
   const tableData = items.map((item, index) => { 
-    // Si el precio de venta viene de la base de datos ya redondeado, no se aplica de nuevo.
-    // Si la función calculateSalePrice estuviera aquí, ya lo haría.
-    const priceUsdFinal = item.priceUsd; 
-    const totalLineUsd = item.quantity * priceUsdFinal; 
+    // Las ventas viejas guardan `priceUsd`; las nuevas, `priceUsdUnit`.
+    const priceUsdFinal = Number(item.priceUsdUnit ?? item.priceUsd ?? 0)
+    const totalLineUsd = Number(item.totalUsdLine ?? item.quantity * priceUsdFinal)
 
     return [
       (index + 1).toString(),
@@ -457,17 +464,17 @@ export function generateInvoice(
   const headStyles = { 
     fillColor: HEADER_DARK, 
     textColor: 255, 
-    fontStyle: "bold",
-    halign: 'left', 
+    fontStyle: "bold" as const,
+    halign: 'left' as const, 
     cellPadding: 3, 
   }
   
   const columnStyles = {
-    0: { cellWidth: 10, halign: 'center' },
-    1: { cellWidth: 100, halign: 'left' },
-    2: { cellWidth: 20, halign: 'center' },
-    3: { cellWidth: 30, halign: 'right' },
-    4: { cellWidth: 30, halign: 'right' },
+    0: { cellWidth: 10, halign: 'center' as const },
+    1: { cellWidth: 100, halign: 'left' as const },
+    2: { cellWidth: 20, halign: 'center' as const },
+    3: { cellWidth: 30, halign: 'right' as const },
+    4: { cellWidth: 30, halign: 'right' as const },
   };
 
 

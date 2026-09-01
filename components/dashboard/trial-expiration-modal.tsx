@@ -8,12 +8,17 @@ import { ADMIN_CONFIG } from "@/lib/admin-config"
 import { useState } from "react"
 
 export default function TrialExpirationModal() {
-  const { isTrialExpired, userData, logout } = useAuth()
+  const { isTrialExpired, userData, expiresAt, logout } = useAuth()
   const [copied, setCopied] = useState(false)
 
-  if (!isTrialExpired || !userData || userData.plan !== "trial") {
+  // Ojo: este componente se renderiza SOLO cuando el dashboard ya decidió
+  // bloquear la app. Devolver null aquí dejaba la pantalla completamente en
+  // blanco, sin siquiera un botón para cerrar sesión.
+  if (!isTrialExpired) {
     return null
   }
+
+  const esPrueba = userData?.plan === "trial"
 
   const handleCopyPhone = () => {
     navigator.clipboard.writeText(ADMIN_CONFIG.phone)
@@ -27,14 +32,19 @@ export default function TrialExpirationModal() {
         <CardHeader className="space-y-2">
           <div className="flex items-center gap-2">
             <AlertCircle className="w-6 h-6 text-destructive" />
-            <CardTitle>Período de Prueba Expirado</CardTitle>
+            <CardTitle>{esPrueba ? "Tu prueba terminó" : "Tu suscripción venció"}</CardTitle>
           </div>
-          <CardDescription>Tu prueba gratuita de 7 días ha terminado</CardDescription>
+          <CardDescription>
+            {expiresAt
+              ? `Venció el ${expiresAt.toLocaleDateString("es-VE", { day: "2-digit", month: "long", year: "numeric" })}`
+              : "La cuenta no tiene acceso activo"}
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-foreground">
-            Para continuar usando Venko, necesitas adquirir un código exclusivo de registro para acceder al plan
-            permanente.
+            {esPrueba
+              ? "Para seguir usando Siskoven, escribe al administrador y activa tu plan."
+              : "Renueva tu plan para volver a entrar. Tus datos siguen guardados: nada se ha borrado."}
           </p>
 
           <div className="bg-primary/10 p-4 rounded-lg space-y-3">
@@ -44,7 +54,8 @@ export default function TrialExpirationModal() {
               <p className="text-lg font-bold text-primary">{ADMIN_CONFIG.phone}</p>
             </div>
             <p className="text-xs text-muted-foreground">
-              Solicita tu código exclusivo y proporciona tu correo: <strong>{userData.email}</strong>
+              Solicita tu código exclusivo y proporciona tu correo:{" "}
+              <strong>{userData?.email ?? "tu correo de registro"}</strong>
             </p>
           </div>
 

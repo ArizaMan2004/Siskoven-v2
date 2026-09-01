@@ -1,16 +1,21 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
-import { motion } from "framer-motion" 
+import { useState, useEffect, useCallback, useRef } from "react"
+import { m } from "framer-motion" 
 import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/firebase"
-import { collection, query, where, getDocs, addDoc, updateDoc, doc, Timestamp } from "firebase/firestore"
+import { collection, query, where, getDocs, addDoc, doc, increment, writeBatch, Timestamp } from "firebase/firestore"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Trash2, Plus, Minus, Scan, ShoppingCart, Search, UserSearch, X } from "lucide-react" 
 import { initBarcodeScanner } from "@/lib/barcode-scanner"
-import { getBCVRate } from "@/lib/bcv-service" 
+import { useRates } from "@/hooks/use-rates"
+import { getTurnoAbierto } from "@/lib/cash-service"
+import { reportFirestoreError, reportFirestoreSuccess } from "@/lib/sync-status"
+import { createNumberedDocument, isOfflineError, unnumbered } from "@/lib/document-numbers"
+import { usePricingSettings } from "@/hooks/use-pricing-settings"
+import { divisaPrice, formatBs, formatMoney, listPrice } from "@/lib/pricing"
 
 // 🔑 IMPORTACIONES DEL GENERADOR DE PDF
 import { generateInvoice, Sale, BusinessInfo } from "@/lib/pdf-generator" 
@@ -21,7 +26,8 @@ import { generateInvoice, Sale, BusinessInfo } from "@/lib/pdf-generator"
 const DOCUMENT_PREFIXES = ["V", "E", "P", "R", "J", "G"];
 const PHONE_PREFIXES = ["0412", "0422", "0414", "0424", "0416", "0426"];
 
-// 🟢 Métodos de pago que aplican el precio en Divisas (Ajustado/Manual)
+// Métodos que se cobran en divisa. Sirve para saber en qué moneda entra el
+// pago; el ajuste de precio en divisa lo decide la configuración del comercio.
 const USD_PAYMENT_METHODS: PaymentMethod[] = ["cash", "zelle", "binance"];
 
 // 🔑 CONSTANTE DE PAGINACIÓN
@@ -70,10 +76,16 @@ type BreakdownMethod = SinglePaymentMethod; // Alias para claridad
 // ==============================================
 
 export default function SalesView() {
-  const { user } = useAuth()
+  const { user, negocioId } = useAuth()
+  // Turno de caja activo. La venta queda atada a él para poder cuadrar al
+  // cierre; si no hay turno abierto se guarda null y la venta no entra en
+  // ningún cuadre (el aviso se muestra arriba del carrito).
+  const [turnoId, setTurnoId] = useState<string | null>(null)
   const [products, setProducts] = useState<Product[]>([])
   const [cart, setCart] = useState<CartItem[]>([])
-  const [bcvRate, setBcvRate] = useState(216.37)
+  // Tasa y ajustes de precio compartidos con el resto del sistema.
+  const { rate: bcvRate } = useRates()
+  const { settings: pricing } = usePricingSettings()
   const [scannerActive, setScannerActive] = useState(false)
   const [barcodeInput, setBarcodeInput] = useState("")
   const [loading, setLoading] = useState(true)
@@ -88,6 +100,9 @@ export default function SalesView() {
 
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash")
   const [discountPercentage, setDiscountPercentage] = useState(0)
+  // Con cuánto paga el cliente, para calcular el vuelto. Es el cálculo que el
+  // cajero hace hoy con el teléfono en la mano cincuenta veces al día.
+  const [pagaCon, setPagaCon] = useState("")
   
   // 🔑 ESTADOS PARA DESGLOSE DE PAGOS MIXTOS (UNIFICADO)
   const [paymentBreakdown, setPaymentBreakdown] = useState<PaymentLine[]>([])
@@ -107,6 +122,7 @@ export default function SalesView() {
   // 🔑 ESTADOS PARA INFORMACIÓN DEL NEGOCIO (MOCK UP para el PDF)
   const [businessName] = useState("Mi Negocio - Example C.A.")
   const [businessInfo] = useState<BusinessInfo>({ 
+    businessName: "Mi Negocio - Example C.A.",
     logoBase64: "", // Imagen Base64
     fiscalAddress: "Av. Principal Sector Industrial, Local #45",
     fiscalDocument: "J-12345678-0",
@@ -130,7 +146,7 @@ export default function SalesView() {
     if (!user) return
     setLoading(true)
     try {
-      const q = query(collection(db, "productos"), where("userId", "==", user.uid))
+      const q = query(collection(db, "productos"), where("negocioId", "==", negocioId ?? user.uid))
       const querySnapshot = await getDocs(q)
       const productsData = querySnapshot.docs.map((doc) => ({
         id: doc.id,
@@ -147,32 +163,38 @@ export default function SalesView() {
   useEffect(() => {
     if (!user) return
     loadProducts()
-    
-    const fetchBcvRate = async () => {
-      try {
-        // Asumiendo que getBCVRate() devuelve un objeto con la tasa actualizada
-        const bcvData = getBCVRate() 
-        const rate = Number(bcvData.rate)
-        if (Number.isFinite(rate) && rate > 0) {
-          setBcvRate(rate)
-        }
-      } catch (error) {
-        console.warn("Error fetching BCV rate, using default value.", error)
-      }
-    }
-    fetchBcvRate()
-    
-    const stopScanner = initBarcodeScanner((code) => {
-        setBarcodeInput(code);
-        handleBarcodeScanned(code);
-    });
-    
-    return () => {
-        if (typeof stopScanner === 'function') {
-            stopScanner();
-        }
-    };
   }, [user, loadProducts])
+
+  useEffect(() => {
+    if (!user || !negocioId) return
+    let cancelled = false
+
+    getTurnoAbierto(negocioId, user.uid)
+      .then((turno) => {
+        if (!cancelled) setTurnoId(turno?.id ?? null)
+      })
+      .catch((error) => console.error("Error consultando el turno de caja:", error))
+
+    return () => {
+      cancelled = true
+    }
+  }, [user, negocioId])
+
+  // El escáner se registra una sola vez, pero llama SIEMPRE al handler actual.
+  // Antes capturaba el `products` del primer render (vacío), así que todo
+  // código escaneado respondía "producto no encontrado".
+  const barcodeHandlerRef = useRef<(code: string) => void>(() => {})
+
+  useEffect(() => {
+    const stopScanner = initBarcodeScanner((code) => {
+      setBarcodeInput(code)
+      barcodeHandlerRef.current(code)
+    })
+
+    return () => {
+      if (typeof stopScanner === "function") stopScanner()
+    }
+  }, [])
 
   // ==============================================
   // 💡 FUNCIÓN DE BÚSQUEDA DE CLIENTE POR CÉDULA/RIF
@@ -199,7 +221,7 @@ export default function SalesView() {
       const q = query(
         collection(db, "clientes"), 
         where("document", "==", documentToSearch), 
-        where("userId", "==", user.uid)
+        where("negocioId", "==", negocioId ?? user.uid)
       );
       const snapshot = await getDocs(q);
 
@@ -247,51 +269,25 @@ export default function SalesView() {
 
 
   // ==============================================
-  // 💡 FUNCIÓN PARA CALCULAR EL PRECIO BASE (SIN AJUSTES)
+  // 💰 PRECIOS
+  // El cálculo vive en @/lib/pricing: la misma función que usa el inventario,
+  // así que lo que ves en Productos es exactamente lo que cobra la caja.
   // ==============================================
-  const calculateFullBasePrice = (product: Product): number => {
-    const costUsd = Number(product.costUsd);
-    if (!Number.isFinite(costUsd) || costUsd <= 0) return 0; 
 
-    let profitDecimal = product.profit > 1 ? product.profit / 100 : product.profit;
-    if (!Number.isFinite(profitDecimal) || profitDecimal < 0 || profitDecimal >= 1) profitDecimal = 0;
+  /** ¿Este pago entra en divisa? Decide si aplica el ajuste configurado. */
+  const isPayingInDivisa =
+    paymentMethod !== "mixed" && pricing.divisaPaymentMethods.includes(paymentMethod)
 
-    const divisor = 1 - profitDecimal;
-    const fullPrice = costUsd / divisor; 
-    return Number.isFinite(fullPrice) ? fullPrice : 0;
+  const unitPriceFor = useCallback(
+    (product: Product): number =>
+      isPayingInDivisa ? divisaPrice(product, pricing) : listPrice(product),
+    [isPayingInDivisa, pricing],
+  )
+
+  const getDisplayPrice = (product: Product): { usd: number; bs: number | null } => {
+    const usd = unitPriceFor(product)
+    return { usd, bs: bcvRate ? usd * bcvRate : null }
   }
-  
-  // 💡 FUNCIÓN PARA CALCULAR EL PRECIO AJUSTADO (Manual o con 30% de descuento)
-  const calculateAdjustedPrice = (product: Product): number => {
-    const fullPrice = calculateFullBasePrice(product);
-    let finalSalePriceUsd = fullPrice;
-    
-    if (product.salePriceUsdManual && product.salePriceUsdManual > 0) {
-      finalSalePriceUsd = product.salePriceUsdManual;
-    } else if (finalSalePriceUsd > 0) {
-      finalSalePriceUsd = finalSalePriceUsd * (1 - 0.3);
-    }
-
-    return finalSalePriceUsd; 
-  }
-
-  // 🟢 FUNCIÓN PARA OBTENER EL PRECIO A MOSTRAR EN LA LISTA DE PRODUCTOS
-  const getDisplayPrice = (product: Product): { usd: number, bs: number } => {
-    const fullPrice = calculateFullBasePrice(product);
-    const adjustedPrice = calculateAdjustedPrice(product);
-    const safeBcvRate = bcvRate > 0 ? bcvRate : 1;
-    
-    // Si el método de pago está en la lista de USD (cash, zelle, binance), usa el precio ajustado.
-    // Si no está (débito, transferencia, pago móvil, mixto, biopago), usa el precio completo.
-    const isUsingUsdPrice = USD_PAYMENT_METHODS.includes(paymentMethod as SinglePaymentMethod);
-    
-    const priceUsdToUse = isUsingUsdPrice ? adjustedPrice : fullPrice;
-
-    return { 
-        usd: priceUsdToUse, 
-        bs: priceUsdToUse * safeBcvRate 
-    };
-  };
 
   // 🔑 CÁLCULO DE CATEGORÍAS ÚNICAS
   const uniqueCategories = Array.from(new Set(products.map(p => p.category))).sort()
@@ -338,33 +334,32 @@ export default function SalesView() {
   }, [totalPages, currentPage]);
 
   // ==============================================
-  // 🧮 BLOQUE DE CÁLCULO DE TOTALES (DINÁMICO SEGÚN PAGO)
+  // 🧮 TOTALES
   // ==============================================
-  const safeBcvRate = bcvRate > 0 ? bcvRate : 1 
-  
-  // 1. Determine la base del precio a usar (ajustado o completo)
-  // En modo Mixto o pago en Bs (Débito, etc.), siempre se usa el precio COMPLETO.
-  // Solo se usa el precio ajustado si el método es UN SOLO USD (cash, zelle, binance).
-  const isPayingInUsdDiscounted = USD_PAYMENT_METHODS.includes(paymentMethod as SinglePaymentMethod) && paymentMethod !== "mixed";
-  
-  // 2. Calcular el Total Base, usando el precio correcto por unidad
-  const baseTotalUsd = cart.reduce((sum, itemInCart) => {
-      const product = products.find(p => p.id === itemInCart.productId);
-      if (!product) return sum;
+  // Sin tasa no se puede convertir a bolívares. Se usa 0 para que el importe
+  // salga en 0 y la caja no deje cobrar, en vez de inventarse un 1 (que hacía
+  // que Bs y divisa mostraran el mismo número).
+  const safeBcvRate = bcvRate ?? 0
 
-      let unitPriceToUse: number;
+  /**
+   * Líneas del carrito con su precio recalculado en cada render. El precio ya
+   * no se congela al añadir: si cambias el método de pago, la línea se ajusta.
+   */
+  const cartLines = cart.map((item) => {
+    const product = products.find((p) => p.id === item.productId)
+    const unitUsd = product ? unitPriceFor(product) : item.priceUsd
+    const lineUsd = unitUsd * item.quantity
 
-      if (isPayingInUsdDiscounted) {
-          // Si paga con UN SOLO método USD: usa el precio ajustado (almacenado en itemInCart.priceUsd)
-          unitPriceToUse = itemInCart.priceUsd; 
-      } else {
-          // Si paga en Bs o Mixto: usa el precio completo sin descuento
-          unitPriceToUse = calculateFullBasePrice(product);
-      }
-      
-      return sum + (unitPriceToUse * itemInCart.quantity);
-  }, 0);
-  
+    return {
+      ...item,
+      product,
+      unitUsd,
+      lineUsd,
+      lineBs: lineUsd * safeBcvRate,
+    }
+  })
+
+  const baseTotalUsd = cartLines.reduce((sum, line) => sum + line.lineUsd, 0)
   const baseTotalBs = baseTotalUsd * safeBcvRate
 
   // 3. Aplicar Descuento Adicional (si existe)
@@ -379,6 +374,18 @@ export default function SalesView() {
   const totalUsd = subtotalUsd 
   const totalBs = totalUsd * safeBcvRate 
   
+  // ------------------------------------------------------------------
+  // VUELTO
+  // El cliente paga en divisa y el vuelto se entrega en bolívares, que es como
+  // funciona de verdad un mostrador en Venezuela: nadie tiene monedas de a
+  // dólar para devolver 1,60.
+  // ------------------------------------------------------------------
+  const pagaConUsd = Number.parseFloat(pagaCon)
+  const hayPago = pagaCon.trim().length > 0 && Number.isFinite(pagaConUsd) && pagaConUsd > 0
+  const vueltoUsd = hayPago ? pagaConUsd - totalUsd : 0
+  const faltaUsd = hayPago && vueltoUsd < -0.001 ? Math.abs(vueltoUsd) : 0
+  const vueltoBs = vueltoUsd > 0 && bcvRate ? vueltoUsd * bcvRate : 0
+
   const discountText = discountRate > 0 
     ? `Descuento Aplicado (${safeDiscount.toFixed(0)}%):` 
     : 'Descuento:'
@@ -457,15 +464,24 @@ export default function SalesView() {
   }
   
   const addToCart = (product: Product, quantity: number, kg?: number) => {
-    // Almacena siempre el precio ajustado en el carrito (el precio que se aplica si se paga en USD).
-    const salePriceUnitAdjusted = calculateAdjustedPrice(product) 
-    
-    if (salePriceUnitAdjusted === 0) {
+    const salePriceUnitAdjusted = unitPriceFor(product)
+
+    if (salePriceUnitAdjusted <= 0) {
         alert("No se pudo calcular el precio de venta. Revise costo y margen del producto.");
         return;
     }
-    if (quantity > product.quantity) { 
-      alert("No hay suficiente inventario")
+
+    // El inventario disponible se mide contra lo que YA hay en el carrito, no
+    // solo contra la cantidad que se añade ahora.
+    const alreadyInCart = cart
+      .filter((i) => i.productId === product.id)
+      .reduce((sum, i) => sum + Number(i.quantity), 0)
+
+    if (alreadyInCart + quantity > product.quantity) {
+      alert(
+        `No hay suficiente inventario. Disponible: ${product.quantity}` +
+          (alreadyInCart > 0 ? `, ya en el carrito: ${alreadyInCart}` : ""),
+      )
       return
     }
 
@@ -480,17 +496,17 @@ export default function SalesView() {
     const linePriceBs = salePriceUnitAdjusted * quantity * safeBcvRate; 
 
     if (existingItemIndex !== -1) {
-      const existingItem = cart[existingItemIndex]
-      const newQuantity = Number(existingItem.quantity) + Number(quantity)
-      
-      if (newQuantity > product.quantity) {
-          alert("Cantidad no disponible")
-          return
-      }
+      const newQuantity = Number(cart[existingItemIndex].quantity) + Number(quantity)
 
-      existingItem.quantity = newQuantity
-      existingItem.priceBs = linePriceBs 
-      setCart([...cart])
+      // Se crea un array nuevo en vez de mutar el objeto que ya está en el
+      // estado: mutarlo hacía que React no viera siempre el cambio.
+      setCart((current) =>
+        current.map((item, index) =>
+          index === existingItemIndex
+            ? { ...item, quantity: newQuantity, priceUsd: salePriceUnitAdjusted, priceBs: linePriceBs }
+            : item,
+        ),
+      )
     } else {
       const item: CartItem = {
         productId: product.id,
@@ -545,13 +561,18 @@ export default function SalesView() {
     )
     
     if (existingItemIndex === -1) return;
-    
-    const updatedCart = [...cart]
-    const itemToUpdate = updatedCart[existingItemIndex]
 
-    itemToUpdate.quantity = newQuantity
-    itemToUpdate.priceBs = itemToUpdate.priceUsd * newQuantity * safeBcvRate 
-    setCart(updatedCart)
+    setCart((current) =>
+      current.map((cartItem, index) =>
+        index === existingItemIndex
+          ? {
+              ...cartItem,
+              quantity: newQuantity,
+              priceBs: cartItem.priceUsd * newQuantity * safeBcvRate,
+            }
+          : cartItem,
+      ),
+    )
   }
 
   const addPaymentLine = () => {
@@ -607,7 +628,13 @@ export default function SalesView() {
     if (cart.length === 0) return alert("El carrito está vacío")
 
     if (!Number.isFinite(totalUsd) || !Number.isFinite(totalBs)) {
-        return alert("Error en el cálculo del total. Por favor, revise los precios y la tasa BCV.");
+        return alert("Error en el cálculo del total. Por favor, revise los precios y la tasa.");
+    }
+
+    // Sin tasa el total en bolívares saldría en 0 y se registraría una venta
+    // falsa. Mejor parar aquí y pedir que se actualice la tasa.
+    if (!bcvRate || bcvRate <= 0) {
+      return alert("No hay tasa de cambio cargada. Actualízala antes de cobrar.")
     }
     
     const currentDocument = fullClientDocument;
@@ -648,7 +675,7 @@ export default function SalesView() {
         const clientQuery = query(
           collection(db, "clientes"), 
           where("document", "==", currentDocument), 
-          where("userId", "==", user.uid)
+          where("negocioId", "==", negocioId ?? user.uid)
         );
         const clientSnapshot = await getDocs(clientQuery);
 
@@ -658,6 +685,7 @@ export default function SalesView() {
           // Registrar nuevo cliente
           const newClientData = {
             userId: user.uid,
+            negocioId: negocioId ?? user.uid,
             name: clientName.trim(),
             document: currentDocument, // Documento limpio con prefijo
             phone: currentPhone || 'N/A', // Teléfono limpio con prefijo
@@ -672,31 +700,31 @@ export default function SalesView() {
 
       // 🔑 2. REGISTRO DE VENTA
       
-      // OBTENER EL PRECIO FINAL REAL POR UNIDAD PARA LA DB/FACTURA
-      const itemsForSale = cart.map((item) => {
-          const product = products.find(p => p.id === item.productId);
-          if (!product) {
-              return { ...item, totalUsdLine: item.priceUsd * item.quantity, priceUsdUnit: item.priceUsd };
-          }
-          
-          let finalUnitUsd: number;
-          if (isPayingInUsdDiscounted) {
-              // PAGO ÚNICO EN USD (con descuento): usa el precio ajustado/manual que está en item.priceUsd
-              finalUnitUsd = item.priceUsd; 
-          } else {
-              // PAGO EN BS, MIXTO o CUALQUIER OTRO: usa el precio completo/base
-              finalUnitUsd = calculateFullBasePrice(product);
-          }
-
-          return {
-              ...item,
-              totalUsdLine: finalUnitUsd * item.quantity,
-              priceUsdUnit: finalUnitUsd,
-          };
-      });
+      // Las líneas ya vienen con el precio correcto para este método de pago.
+      // Se guarda también el costo, para poder calcular la ganancia real luego.
+      const itemsForSale = cartLines.map(({ product, ...line }) => ({
+          productId: line.productId,
+          name: line.name,
+          quantity: line.quantity,
+          saleType: line.saleType,
+          ...(line.kg !== undefined ? { kg: line.kg } : {}),
+          priceUsdUnit: line.unitUsd,
+          // Se conserva el nombre histórico para que el PDF de ventas
+          // anteriores y las nuevas se lean con el mismo código.
+          priceUsd: line.unitUsd,
+          totalUsdLine: line.lineUsd,
+          priceBs: line.lineBs,
+          costUsdUnit: product ? Number(product.costUsd) || 0 : 0,
+      }));
 
       const saleData: any = {
         userId: user.uid,
+        negocioId: negocioId ?? user.uid,
+        // Quién cobró y en qué turno. Es lo que permite cuadrar la caja y saber
+        // de quién es un faltante.
+        cajeroUid: user.uid,
+        turnoId: turnoId ?? null,
+        anulada: false,
         items: itemsForSale, // Usar los items con el precio final correcto
         clientId: currentClientId, 
         clientInfo: { 
@@ -738,29 +766,70 @@ export default function SalesView() {
         }
       }
 
-      const newSaleRef = await addDoc(collection(db, "ventas"), saleData) 
+      // 🔑 NUMERACIÓN CORRELATIVA
+      //
+      // El número y la venta se escriben en la MISMA transacción: o salen los
+      // dos o no sale ninguno. Por eso la serie no deja huecos aunque falle el
+      // guardado a mitad.
+      //
+      // Si no hay servidor (sin luz, sin internet, cuota agotada) la venta se
+      // guarda igual pero sin número, marcada como pendiente. Nunca se inventa
+      // un número provisional: uno que después cambia es peor que ninguno.
+      let numeroAsignado: string | null = null
 
-      // 🔑 3. GENERAR PDF DE FACTURA
-      // COMENTADO: Desactivar la generación automática de PDF
-      /*
-      ...
-      */
+      try {
+        const creada = await createNumberedDocument({
+          negocioId: negocioId ?? user.uid,
+          tipo: "nota_entrega",
+          coleccion: "ventas",
+          buildData: (numeracion) => ({ ...saleData, ...numeracion }),
+        })
+        numeroAsignado = creada.numeroDocumento
+      } catch (error) {
+        if (!isOfflineError(error)) throw error
 
-      // 4. Actualizar Inventario 
-      for (const item of cart) {
-        const product = products.find((p) => p.id === item.productId)
-        if (product) {
-          await updateDoc(doc(db, "productos", product.id), {
-            quantity: product.quantity - item.quantity,
-          })
-        }
+        // Sin servidor: se guarda por la vía normal, que sí funciona sin
+        // conexión porque Firestore la encola en el disco del navegador.
+        await addDoc(collection(db, "ventas"), {
+          ...saleData,
+          ...unnumbered("nota_entrega"),
+        })
+        reportFirestoreError(error)
       }
 
-      alert("Venta registrada exitosamente")
+      // 3. Descontar el inventario.
+      //
+      // Antes se recorría el carrito escribiendo `quantity: product.quantity - item.quantity`
+      // línea por línea. Eso tenía dos fallos: si un producto aparecía en varias
+      // líneas (típico en venta por peso) solo se descontaba la última, porque
+      // todas partían de la misma cantidad leída al cargar la vista; y si dos
+      // cajas vendían a la vez, la segunda pisaba a la primera.
+      //
+      // Ahora se suman las unidades por producto y se usa increment(), que hace
+      // la resta en el servidor sobre el valor real del momento.
+      const quantityByProduct = new Map<string, number>()
+      for (const item of cart) {
+        const previous = quantityByProduct.get(item.productId) ?? 0
+        quantityByProduct.set(item.productId, previous + Number(item.quantity))
+      }
+
+      const batch = writeBatch(db)
+      for (const [productId, quantity] of quantityByProduct) {
+        batch.update(doc(db, "productos", productId), { quantity: increment(-quantity) })
+      }
+      await batch.commit()
+
+      if (numeroAsignado) reportFirestoreSuccess()
+      alert(
+        numeroAsignado
+          ? `Venta registrada · ${numeroAsignado}`
+          : "Venta guardada en este dispositivo. Recibirá su número cuando vuelva la conexión.",
+      )
       // Limpiar estados
       setCart([])
       setPaymentBreakdown([]) // Limpiar el desglose
       setDiscountPercentage(0)
+      setPagaCon("")
       setClientId(null)
       setClientDocumentPrefix("V")
       setClientDocumentNumber("")
@@ -771,7 +840,16 @@ export default function SalesView() {
       loadProducts()
     } catch (error) {
       console.error("Error registrando venta:", error)
-      alert("Error al procesar la venta")
+
+      // Sin conexión o con la cuota agotada, Firestore guarda la venta en la
+      // cola local y la sube sola: no hay que asustar al cajero ni pedirle que
+      // vuelva a cobrar, porque cobraría dos veces.
+      const estado = reportFirestoreError(error)
+      alert(
+        estado === "offline" || estado === "quota"
+          ? "La venta quedó guardada en este dispositivo y se subirá sola. No la registres de nuevo."
+          : "Error al procesar la venta.",
+      )
     }
   }
 
@@ -793,7 +871,7 @@ export default function SalesView() {
   // 🖥️ JSX (RENDERIZADO)
   // ==============================================
   return (
-    <motion.div
+    <m.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, ease: "easeOut" }}
@@ -802,6 +880,18 @@ export default function SalesView() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
         {/* COLUMNA IZQUIERDA: Búsqueda y Productos */}
         <div className="lg:col-span-2 space-y-4 lg:space-y-6">
+          {/* Sin turno abierto la venta se registra igual, pero no entra en
+              ningún cuadre de caja. Vale la pena avisarlo antes de cobrar. */}
+          {turnoId === null && (
+            <div className="bg-warning/15 text-warning-foreground dark:text-warning flex items-start gap-2 rounded-lg px-3 py-2 text-sm">
+              <span aria-hidden>⚠</span>
+              <span>
+                No tienes la caja abierta. Puedes vender, pero estas ventas no entrarán en el cuadre
+                del turno.
+              </span>
+            </div>
+          )}
+
           <div className="flex items-center justify-between">
             <h2 className="text-2xl lg:text-3xl font-bold">Punto de Venta</h2>
             <Button
@@ -980,7 +1070,7 @@ export default function SalesView() {
                 const salePriceBs = displayPrices.bs;
 
                 // Marcador visual para saber qué precio se está usando
-                const isPriceDiscounted = isPayingInUsdDiscounted;
+                const isPriceDiscounted = isPayingInDivisa;
                 const priceLabel = isPriceDiscounted ? "PRECIO USD (Dscto)" : "PRECIO BASE (Bs)";
                 const priceColor = isPriceDiscounted ? "text-green-500" : "text-red-500";
 
@@ -995,11 +1085,13 @@ export default function SalesView() {
                         
                         <div className="flex justify-between items-center">
                             <span className={`text-xs font-bold ${priceColor}`}>{priceLabel}:</span>
-                            <span className="font-semibold">${salePrice.toFixed(2)}</span>
+                            <span className="font-semibold tabular-nums">{formatMoney(salePrice)}</span>
                         </div>
                         <div className="flex justify-between items-center">
                           <span className="text-muted-foreground">Bs:</span>
-                          <span className="font-semibold">Bs {salePriceBs.toFixed(2)}</span>
+                          <span className="font-semibold tabular-nums">
+                            {salePriceBs !== null ? formatBs(salePriceBs) : "sin tasa"}
+                          </span>
                         </div>
                         <div className="flex justify-between items-center text-xs pt-1 border-t">
                           <span className="text-muted-foreground">
@@ -1077,15 +1169,10 @@ export default function SalesView() {
                   <p className="text-center text-muted-foreground py-8">Carrito vacío</p>
                 ) : (
                   <div className="space-y-3 overflow-y-auto flex-1 pr-2">
-                    {cart.map((item) => {
-                      const product = products.find(p => p.id === item.productId);
-                      if (!product) return null;
-
-                      // LÓGICA DE VISUALIZACIÓN DINÁMICA
-                      const unitPriceFull = calculateFullBasePrice(product);
-                      // Precio unitario a mostrar en el carrito 
-                      const unitPriceToDisplay = isPayingInUsdDiscounted ? item.priceUsd : unitPriceFull;
-                      const lineTotalBs = unitPriceToDisplay * item.quantity * safeBcvRate;
+                    {cartLines.map((line) => {
+                      const item = line
+                      const unitPriceToDisplay = line.unitUsd
+                      const lineTotalBs = line.lineBs
 
                       return (
                         <div
@@ -1124,18 +1211,18 @@ export default function SalesView() {
                           </div>
 
                           <div className="text-sm text-muted-foreground">
-                            <span className={`font-semibold ${isPayingInUsdDiscounted ? 'text-purple-600' : 'text-foreground'}`}>
-                                ${unitPriceToDisplay.toFixed(2)} USD
+                            <span className={`font-semibold ${isPayingInDivisa ? 'text-purple-600' : 'text-foreground'}`}>
+                                {formatMoney(unitPriceToDisplay)}
                             </span>
                             x {item.quantity} ud/kg
                             {item.saleType === "weight" && ` — ${item.kg} kg`}
                           </div>
                           <div className="text-base font-semibold text-primary">
-                            Total: Bs {lineTotalBs.toFixed(2)}
+                            Total: {bcvRate ? formatBs(lineTotalBs) : formatMoney(line.lineUsd)}
                           </div>
-                          {!isPayingInUsdDiscounted && (
+                          {!isPayingInDivisa && (
                               <p className="text-xs text-muted-foreground mt-1">
-                                  Usando precio completo (${unitPriceFull.toFixed(2)})
+                                  Precio de lista (sin ajuste por pago en divisa)
                               </p>
                           )}
                         </div>
@@ -1270,7 +1357,7 @@ export default function SalesView() {
                                           setNewPaymentAmount(amountToAdd.toString());
                                       }}
                                       variant="outline"
-                                      size="xs"
+                                      size="sm"
                                       className="h-7 text-xs px-2 py-0 border-dashed hover:bg-primary/5"
                                   >
                                       Añadir Restante ({USD_PAYMENT_METHODS.includes(newPaymentMethod) ? 'USD' : 'Bs'})
@@ -1327,6 +1414,49 @@ export default function SalesView() {
                     </div>
                   )}
 
+                  {/* Vuelto: solo cuando se cobra con un método en divisa y
+                      hay algo en el carrito. En pago mixto no aplica, porque
+                      ahí el desglose ya cuadra el total exacto. */}
+                  {cart.length > 0 && isPayingInDivisa && (
+                    <div className="space-y-2 rounded-lg border p-3">
+                      <label htmlFor="paga-con" className="text-sm font-medium">
+                        ¿Con cuánto paga?
+                      </label>
+                      <Input
+                        id="paga-con"
+                        type="number"
+                        inputMode="decimal"
+                        step="0.01"
+                        min="0"
+                        placeholder={`Total: ${formatMoney(totalUsd)}`}
+                        value={pagaCon}
+                        onChange={(e) => setPagaCon(e.target.value)}
+                        className="h-11 text-lg tabular-nums"
+                      />
+
+                      {hayPago && faltaUsd > 0 && (
+                        <p className="text-destructive text-sm font-medium">
+                          Faltan {formatMoney(faltaUsd)}
+                        </p>
+                      )}
+
+                      {hayPago && faltaUsd === 0 && (
+                        <div className="bg-primary/10 rounded-md p-3">
+                          <p className="text-muted-foreground text-xs">Vuelto</p>
+                          {/* La cifra en bolívares es la protagonista: es la que
+                              el cajero tiene que sacar de la gaveta. */}
+                          <p className="text-primary text-2xl font-bold tabular-nums">
+                            {bcvRate ? formatBs(vueltoBs) : "falta la tasa"}
+                          </p>
+                          <p className="text-muted-foreground mt-0.5 text-xs tabular-nums">
+                            equivale a {formatMoney(vueltoUsd)}
+                            {bcvRate ? ` · tasa ${bcvRate.toLocaleString("es-VE", { maximumFractionDigits: 2 })}` : ""}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <Button
                     onClick={handleCheckout}
                     // Deshabilitar si es pago mixto y aún queda un restante significativo
@@ -1341,6 +1471,6 @@ export default function SalesView() {
           </div>
         </div>
       </div>
-    </motion.div>
+    </m.div>
   )
 }
