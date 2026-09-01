@@ -46,6 +46,10 @@ export interface PricingSettings {
   /** Múltiplo al que se redondea el precio en bolívares. 0 = sin redondear. */
   bsRounding: number
   bsRoundingMode: RoundingMode
+  /** Ancho del papel de la impresora térmica, en milímetros. */
+  paperWidth: 58 | 80
+  /** Imprimir el recibo automáticamente al confirmar una venta. */
+  autoPrint: boolean
 }
 
 export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
@@ -55,6 +59,8 @@ export const DEFAULT_PRICING_SETTINGS: PricingSettings = {
   divisaPaymentMethods: ["cash", "zelle", "binance"],
   bsRounding: 0,
   bsRoundingMode: "nearest",
+  paperWidth: 58,
+  autoPrint: false,
 }
 
 export const ROUNDING_OPTIONS = [
@@ -99,6 +105,8 @@ export function normalizePricingSettings(raw: unknown): PricingSettings {
     bsRoundingMode: isRoundingMode(input.bsRoundingMode)
       ? input.bsRoundingMode
       : DEFAULT_PRICING_SETTINGS.bsRoundingMode,
+    paperWidth: input.paperWidth === 80 ? 80 : DEFAULT_PRICING_SETTINGS.paperWidth,
+    autoPrint: input.autoPrint === true,
   }
 }
 

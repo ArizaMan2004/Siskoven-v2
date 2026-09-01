@@ -8,12 +8,13 @@ import { collection, query, where, getDocs, addDoc, doc, increment, writeBatch, 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Trash2, Plus, Minus, Scan, ShoppingCart, Search, UserSearch, X } from "lucide-react" 
+import { Trash2, Plus, Minus, Printer, Scan, ShoppingCart, Search, UserSearch, X } from "lucide-react"
 import { initBarcodeScanner } from "@/lib/barcode-scanner"
 import { useRates } from "@/hooks/use-rates"
 import { getTurnoAbierto } from "@/lib/cash-service"
 import { loadProducts as fetchCatalogo } from "@/lib/products-service"
 import { reportFirestoreError, reportFirestoreSuccess } from "@/lib/sync-status"
+import { type ReceiptData, printReceipt } from "@/lib/thermal-receipt"
 import { createNumberedDocument, isOfflineError, unnumbered } from "@/lib/document-numbers"
 import { usePricingSettings } from "@/hooks/use-pricing-settings"
 import { divisaPrice, formatBs, formatMoney, listPrice } from "@/lib/pricing"
@@ -105,6 +106,10 @@ export default function SalesView() {
   // Con cuánto paga el cliente, para calcular el vuelto. Es el cálculo que el
   // cajero hace hoy con el teléfono en la mano cincuenta veces al día.
   const [pagaCon, setPagaCon] = useState("")
+  // Último recibo emitido, para poder reimprimirlo si la impresora se atascó o
+  // el cliente lo pide otra vez. Se pierde al recargar, y está bien: para eso
+  // están los reportes.
+  const [ultimoRecibo, setUltimoRecibo] = useState<ReceiptData | null>(null)
   
   // 🔑 ESTADOS PARA DESGLOSE DE PAGOS MIXTOS (UNIFICADO)
   const [paymentBreakdown, setPaymentBreakdown] = useState<PaymentLine[]>([])
@@ -843,6 +848,42 @@ export default function SalesView() {
       await batch.commit()
 
       if (numeroAsignado) reportFirestoreSuccess()
+
+      // El recibo se arma con lo que se acaba de cobrar, antes de vaciar el
+      // carrito. Se imprime igual sin conexión: es papel, no depende del
+      // servidor. Si la venta quedó sin numerar, el recibo lo dice.
+      const recibo: ReceiptData = {
+        negocio: {
+          nombre: businessInfo.businessName || businessName,
+          rif: businessInfo.fiscalDocument,
+          direccion: businessInfo.fiscalAddress,
+          telefono: businessInfo.phoneNumber,
+        },
+        numeroDocumento: numeroAsignado,
+        tipoDocumento: "Nota de entrega",
+        fecha: new Date(),
+        cajero: user.email,
+        cliente: clientName ? { nombre: clientName, documento: currentDocument } : null,
+        items: cartLines.map((line) => ({
+          nombre: line.name,
+          cantidad: line.quantity,
+          precioUnitario: line.unitUsd,
+          total: line.lineUsd,
+        })),
+        totales: {
+          subtotal: baseTotalUsd,
+          descuento: discountAmountUsd,
+          total: totalUsd,
+          totalBs,
+          tasa: bcvRate,
+        },
+        metodoPago: getPaymentMethodDescription(paymentMethod, paymentBreakdown),
+        vueltoBs: vueltoBs > 0 ? vueltoBs : null,
+      }
+
+      setUltimoRecibo(recibo)
+      if (pricing.autoPrint) printReceipt(recibo, pricing.paperWidth)
+
       alert(
         numeroAsignado
           ? `Venta registrada · ${numeroAsignado}`
@@ -1488,6 +1529,19 @@ export default function SalesView() {
                   >
                     Confirmar Venta
                   </Button>
+
+                  {/* Reimprimir la última: la impresora térmica se atasca, se
+                      queda sin papel, o el cliente pide otra copia. */}
+                  {ultimoRecibo && (
+                    <Button
+                      variant="outline"
+                      className="w-full gap-2"
+                      onClick={() => printReceipt(ultimoRecibo, pricing.paperWidth)}
+                    >
+                      <Printer className="w-4 h-4" />
+                      Imprimir recibo{ultimoRecibo.numeroDocumento ? ` ${ultimoRecibo.numeroDocumento}` : ""}
+                    </Button>
+                  )}
                 </div>
               </CardContent>
             </Card>

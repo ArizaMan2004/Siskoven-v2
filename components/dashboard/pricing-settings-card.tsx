@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Check, Coins, Loader2 } from "lucide-react"
+import { Check, Coins, Loader2, Printer } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -146,6 +146,55 @@ export default function PricingSettingsCard() {
                 </option>
               ))}
             </select>
+          </div>
+        </div>
+
+        {/* ----------------------------------------------------- impresión */}
+        <div className="space-y-3 border-t pt-4">
+          <p className="flex items-center gap-2 text-sm font-medium">
+            <Printer className="text-primary size-4" />
+            Impresora de recibos
+          </p>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <label htmlFor="paper-width" className="text-sm font-medium">
+                Ancho del papel
+              </label>
+              <select
+                id="paper-width"
+                className={SELECT_CLASS}
+                value={draft.paperWidth}
+                onChange={(event) =>
+                  setDraft({ ...draft, paperWidth: Number(event.target.value) === 80 ? 80 : 58 })
+                }
+              >
+                <option value={58}>58 mm (el rollo más común)</option>
+                <option value={80}>80 mm (rollo ancho)</option>
+              </select>
+              <p className="text-muted-foreground text-xs">
+                Mídelo o míralo en la caja del rollo. Con el ancho equivocado el recibo sale cortado
+                o diminuto.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="auto-print" className="text-sm font-medium">
+                Al confirmar una venta
+              </label>
+              <select
+                id="auto-print"
+                className={SELECT_CLASS}
+                value={draft.autoPrint ? "auto" : "manual"}
+                onChange={(event) => setDraft({ ...draft, autoPrint: event.target.value === "auto" })}
+              >
+                <option value="manual">Preguntar / imprimir a mano</option>
+                <option value="auto">Imprimir el recibo automáticamente</option>
+              </select>
+              <p className="text-muted-foreground text-xs">
+                La impresora debe estar instalada en el sistema como una impresora normal.
+              </p>
+            </div>
           </div>
         </div>
 

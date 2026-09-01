@@ -2,11 +2,11 @@
   "name": "Siskoven - Gestión de Inventario",
   "short_name": "Siskoven",
   "description": "Sistema de gestión de inventario y ventas para tu negocio.",
-  "start_url": "/", 
+  "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#ffffff", 
-  "theme_color": "#2563eb", 
+  "background_color": "#f6f8fb",
+  "theme_color": "#1e3a73",
   "icons": [
     {
       "src": "/icons/icon-72x72.png",
@@ -29,5 +29,11 @@
       "type": "image/png",
       "purpose": "maskable"
     }
+  ],
+  "lang": "es-VE",
+  "categories": [
+    "business",
+    "productivity",
+    "finance"
   ]
 }
