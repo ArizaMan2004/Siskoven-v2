@@ -38,6 +38,10 @@ export type Permission =
   | "costs.view" // ver costo y utilidad
   | "prices.edit"
   | "pricing.settings"
+  | "accounts.view" // saldos de las cuentas y libro de movimientos
+  | "accounts.manage" // crear cuentas, transferir entre ellas
+  | "expenses.view"
+  | "expenses.create"
   // Caja
   | "cash.openShift"
   | "cash.closeOwnShift"
@@ -90,6 +94,14 @@ const PERMISSIONS: Record<Role, Permission[]> = {
     "costs.view",
     "prices.edit",
     "pricing.settings",
+    "accounts.view",
+    "accounts.manage",
+    "expenses.view",
+    "expenses.create",
+    "accounts.view",
+    "accounts.manage",
+    "expenses.view",
+    "expenses.create",
     "cash.openShift",
     "cash.closeOwnShift",
     "cash.closeAnyShift",
