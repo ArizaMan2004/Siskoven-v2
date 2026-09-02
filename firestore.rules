@@ -60,7 +60,6 @@ service cloud.firestore {
 
     function isOwner() { return myRole() == 'owner'; }
     function isAdmin() { return myRole() in ['owner', 'admin']; }
-    function isCashier() { return myRole() == 'cashier'; }
 
     // La cuenta tiene que estar activa y sin vencer.
     //

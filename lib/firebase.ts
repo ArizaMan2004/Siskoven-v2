@@ -40,8 +40,26 @@ export const auth = getAuth(app)
  * volver a abrir la aplicación nunca. Por eso el aviso en pantalla insiste en
  * no cerrar sesión mientras haya algo pendiente.
  */
-export const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager(),
-  }),
-})
+
+/**
+ * Identificador de la base de datos.
+ *
+ * Ojo: la base de este proyecto se llama "default" (una base CON NOMBRE), no
+ * "(default)", que es la predeterminada que el SDK busca cuando no se le dice
+ * nada. Sin este tercer argumento la aplicación se conecta a una base que no
+ * existe y toda lectura falla, sin un error que lo explique.
+ *
+ * Se lee del entorno para no dejarlo escrito a fuego: si algún día se migra a
+ * la base predeterminada, basta con borrar la variable.
+ */
+const DATABASE_ID = process.env.NEXT_PUBLIC_FIREBASE_DATABASE_ID || "(default)"
+
+export const db = initializeFirestore(
+  app,
+  {
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager(),
+    }),
+  },
+  DATABASE_ID,
+)
