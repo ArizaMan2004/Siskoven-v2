@@ -133,9 +133,7 @@ export default function Dashboard() {
               {/* La tasa vigente siempre visible: es el dato que más se consulta. */}
               <RateWidget compact className="hidden sm:flex" />
 
-              {/* La ayuda de la pantalla que se esté mirando. Va aquí y no
-                  flotando porque abajo a la derecha vive el distintivo de
-                  reCAPTCHA, que Google obliga a mostrar. */}
+              {/* La ayuda de la pantalla que se esté mirando. */}
               <HelpButton vista={resolvedView} />
 
               <div className="lg:hidden">

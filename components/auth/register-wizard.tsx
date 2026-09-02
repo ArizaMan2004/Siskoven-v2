@@ -6,7 +6,6 @@ import { m } from "framer-motion"
 import { createUserWithEmailAndPassword, sendEmailVerification } from "firebase/auth"
 import { doc, setDoc } from "firebase/firestore"
 import { buscarInvitacion, marcarInvitacionAceptada } from "@/lib/team"
-import { useGoogleReCaptcha } from "react-google-recaptcha-v3"
 import { AlertCircle, ArrowLeft, ArrowRight, Check, Eye, EyeOff, Loader2, MailCheck } from "lucide-react"
 import { auth, db } from "@/lib/firebase"
 import { Button } from "@/components/ui/button"
@@ -44,8 +43,6 @@ interface RegisterWizardProps {
  * alguien abandona a mitad, no queda una cuenta huérfana sin negocio.
  */
 export default function RegisterWizard({ onGoToLogin }: RegisterWizardProps) {
-  const { executeRecaptcha } = useGoogleReCaptcha()
-
   const [step, setStep] = useState(1)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
@@ -93,24 +90,15 @@ export default function RegisterWizard({ onGoToLogin }: RegisterWizardProps) {
     setError("")
 
     try {
-      // reCAPTCHA. Si no llegó a cargar se deja pasar en vez de bloquear el
-      // registro: perder un alta legítima es peor que dejar entrar un bot que
-      // después tendrá que verificar el correo igualmente.
-      if (executeRecaptcha) {
-        const token = await executeRecaptcha("registro")
-        const respuesta = await fetch("/api/verify-recaptcha", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token }),
-        })
-        const datos = await respuesta.json()
-        if (datos?.success === false) {
-          setError("No pudimos verificar que eres una persona. Vuelve a intentarlo.")
-          setLoading(false)
-          return
-        }
-      }
-
+      // Sin captcha. Lo que frena de verdad a un bot aquí no es un
+      // rompecabezas en el formulario sino lo que viene después: la cuenta no
+      // toca ni un dato hasta que se verifica el correo —lo exige la primera
+      // comprobación de firestore.rules— y Firebase Auth ya limita por su
+      // cuenta cuántas altas admite de una misma procedencia.
+      //
+      // Si algún día hace falta más, el sitio correcto es App Check, que
+      // protege cada lectura y cada escritura de Firestore en vez de una sola
+      // pantalla.
       const credenciales = await createUserWithEmailAndPassword(auth, email.trim(), password)
       await sendEmailVerification(credenciales.user)
 
