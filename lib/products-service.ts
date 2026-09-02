@@ -39,6 +39,20 @@ import { db } from "./firebase"
 import { type PricingSettings, divisaPrice, listPrice } from "./pricing"
 import type { IvaCategory } from "./taxes"
 
+/**
+ * Cómo se vende y se mide un producto.
+ *
+ * `service` no es una unidad de medida sino otra naturaleza: un servicio no
+ * tiene existencias, no se descuenta al venderlo y no aparece nunca en las
+ * alertas de inventario bajo. Va en este mismo campo porque es justo el que
+ * decide qué hacer con la cantidad al vender.
+ */
+export type SaleType = "unit" | "weight" | "service"
+
+export function esServicio(producto: { saleType?: SaleType | string }): boolean {
+  return producto?.saleType === "service"
+}
+
 /** Lo que ve cualquiera en el negocio, cajero incluido. */
 export interface PublicProduct {
   id: string
@@ -46,8 +60,13 @@ export interface PublicProduct {
   name: string
   category: string
   quantity: number
-  saleType: "unit" | "weight"
+  saleType: SaleType
   barcode?: string
+  /**
+   * Por debajo de esta cantidad, el producto sale en la alerta de inventario
+   * bajo. Cero significa que no se vigila.
+   */
+  stockMinimo?: number
   /** Precio de lista en divisa. Ya calculado: aquí no se deduce del costo. */
   precioUsd: number
   /** Precio en divisa con el ajuste del comercio aplicado. */
@@ -124,8 +143,9 @@ export interface ProductInput {
   name: string
   category: string
   quantity: number
-  saleType: "unit" | "weight"
+  saleType: SaleType
   barcode: string
+  stockMinimo?: number
   costUsd: number
   profit: number
   salePriceUsdManual?: number | null
@@ -163,9 +183,12 @@ export async function saveProduct(params: {
     negocioId,
     name: input.name,
     category: input.category,
-    quantity: input.quantity,
+    // Un servicio no lleva existencias: se guarda en cero para que ninguna
+    // pantalla lo cuente como inventario ni lo meta en una alerta.
+    quantity: input.saleType === "service" ? 0 : input.quantity,
     saleType: input.saleType,
     barcode: input.barcode,
+    stockMinimo: input.saleType === "service" ? 0 : (input.stockMinimo ?? 0),
     precioUsd: listPrice(paraCalcular),
     precioDivisaUsd: divisaPrice(paraCalcular, pricing),
     ivaCategory: input.ivaCategory ?? "general",
@@ -252,3 +275,85 @@ export async function getProductCost(productId: string): Promise<ProductCost | n
 
 /** Se mantiene por compatibilidad con quien importe el borrado suelto. */
 export { deleteDoc }
+
+// ---------------------------------------------------------------------------
+// Alertas de inventario
+// ---------------------------------------------------------------------------
+
+export type EstadoStock = "agotado" | "bajo" | "ok" | "sin_control"
+
+/**
+ * En qué estado está un producto respecto a su stock mínimo.
+ *
+ * Los servicios devuelven "sin_control": no tienen existencias que vigilar, y
+ * meterlos en la lista de agotados sería ruido que hace ignorar la alerta
+ * entera.
+ */
+export function estadoStock(producto: {
+  saleType?: SaleType | string
+  quantity?: number
+  stockMinimo?: number
+}): EstadoStock {
+  if (esServicio(producto)) return "sin_control"
+
+  const cantidad = Number(producto?.quantity) || 0
+  if (cantidad <= 0) return "agotado"
+
+  const minimo = Number(producto?.stockMinimo) || 0
+  if (minimo <= 0) return "sin_control"
+
+  return cantidad <= minimo ? "bajo" : "ok"
+}
+
+export interface ResumenStock {
+  agotados: PublicProduct[]
+  bajos: PublicProduct[]
+  /** Cuántos productos tienen un mínimo definido. Sin ninguno, la alerta no sirve. */
+  vigilados: number
+  /** Valor del inventario a precio de costo, si se tienen los costos. */
+  valorCostoUsd: number | null
+  /** Valor del inventario a precio de venta. */
+  valorVentaUsd: number
+}
+
+export function resumirStock(productos: ProductWithCost[]): ResumenStock {
+  const agotados: PublicProduct[] = []
+  const bajos: PublicProduct[] = []
+  let vigilados = 0
+  let valorCostoUsd = 0
+  let valorVentaUsd = 0
+  let hayCostos = false
+
+  for (const producto of productos) {
+    if (esServicio(producto)) continue
+
+    const cantidad = Number(producto.quantity) || 0
+    valorVentaUsd += cantidad * (Number(producto.precioUsd) || 0)
+
+    if (typeof producto.costUsd === "number") {
+      hayCostos = true
+      valorCostoUsd += cantidad * producto.costUsd
+    }
+
+    if ((Number(producto.stockMinimo) || 0) > 0) vigilados += 1
+
+    const estado = estadoStock(producto)
+    if (estado === "agotado") agotados.push(producto)
+    else if (estado === "bajo") bajos.push(producto)
+  }
+
+  const ordenar = (lista: PublicProduct[]) =>
+    lista.sort((a, b) => (Number(a.quantity) || 0) - (Number(b.quantity) || 0))
+
+  const redondear = (valor: number) => Math.round(valor * 100) / 100
+
+  return {
+    agotados: ordenar(agotados),
+    bajos: ordenar(bajos),
+    vigilados,
+    // Sin ningún costo a mano no se devuelve cero, que se leería como "tu
+    // inventario no vale nada": se devuelve null y la pantalla lo dice.
+    valorCostoUsd: hayCostos ? redondear(valorCostoUsd) : null,
+    valorVentaUsd: redondear(valorVentaUsd),
+  }
+}

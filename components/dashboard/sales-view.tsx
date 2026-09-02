@@ -12,7 +12,7 @@ import { Trash2, Plus, Minus, Printer, Scan, ShoppingCart, Search, UserSearch, X
 import { initBarcodeScanner } from "@/lib/barcode-scanner"
 import { useRates } from "@/hooks/use-rates"
 import { getTurnoAbierto } from "@/lib/cash-service"
-import { loadProducts as fetchCatalogo } from "@/lib/products-service"
+import { type SaleType, loadProducts as fetchCatalogo, esServicio } from "@/lib/products-service"
 import { reportFirestoreError, reportFirestoreSuccess } from "@/lib/sync-status"
 import { type ReceiptData, printReceipt } from "@/lib/thermal-receipt"
 import { createNumberedDocument, isOfflineError, unnumbered } from "@/lib/document-numbers"
@@ -43,7 +43,7 @@ interface Product {
   name: string
   category: string
   quantity: number
-  saleType: "unit" | "weight"
+  saleType: SaleType
   barcode?: string
   /** Precio de lista, ya calculado al guardar el producto. */
   precioUsd?: number | null
@@ -57,7 +57,7 @@ interface CartItem {
   quantity: number
   priceUsd: number 
   priceBs: number 
-  saleType: "unit" | "weight" 
+  saleType: SaleType
   kg?: number 
 }
 
@@ -474,13 +474,13 @@ export default function SalesView() {
         return;
     }
 
-    // El inventario disponible se mide contra lo que YA hay en el carrito, no
-    // solo contra la cantidad que se añade ahora.
+    // Un servicio no se agota: reparar diez teléfonos no consume existencias.
+    // Saltarse la comprobación aquí es lo que permite venderlo sin inventario.
     const alreadyInCart = cart
       .filter((i) => i.productId === product.id)
       .reduce((sum, i) => sum + Number(i.quantity), 0)
 
-    if (alreadyInCart + quantity > product.quantity) {
+    if (!esServicio(product) && alreadyInCart + quantity > product.quantity) {
       alert(
         `No hay suficiente inventario. Disponible: ${product.quantity}` +
           (alreadyInCart > 0 ? `, ya en el carrito: ${alreadyInCart}` : ""),
@@ -837,6 +837,8 @@ export default function SalesView() {
       // la resta en el servidor sobre el valor real del momento.
       const quantityByProduct = new Map<string, number>()
       for (const item of cart) {
+        // Los servicios no tienen existencias que descontar.
+        if (item.saleType === "service") continue
         const previous = quantityByProduct.get(item.productId) ?? 0
         quantityByProduct.set(item.productId, previous + Number(item.quantity))
       }

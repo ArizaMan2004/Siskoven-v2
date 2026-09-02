@@ -5,8 +5,12 @@ import { useAuth } from "@/lib/auth-context"
 import { db } from "@/lib/firebase"
 import {
   type ProductWithCost,
+  type SaleType,
   deleteProduct,
+  esServicio,
+  estadoStock,
   loadProductsWithCosts,
+  resumirStock,
   saveProduct,
 } from "@/lib/products-service"
 import { Button } from "@/components/ui/button"
@@ -18,6 +22,7 @@ import RateWidget from "./rate-widget"
 import PricingSettingsCard from "./pricing-settings-card"
 import TaxSettingsCard from "./tax-settings-card"
 import ImportProductsDialog from "./import-products-dialog"
+import StockAlertCard, { StockValueCard } from "./stock-alert-card"
 import { AnimatePresence } from "framer-motion"
 import { useRates } from "@/hooks/use-rates"
 import { usePricingSettings } from "@/hooks/use-pricing-settings"
@@ -39,9 +44,9 @@ interface FormData {
   costUsd: string
   quantity: string
   profit: string
-  saleType: "unit" | "weight"
+  saleType: SaleType
   barcode: string
-  // 🟢 NUEVO: Campo de entrada para precio manual
+  stockMinimo: string
   salePriceUsdManual: string
 }
 
@@ -82,8 +87,8 @@ export default function ProductsView() {
     profit: "",
     saleType: "unit",
     barcode: "",
-    // 🟢 NUEVO: Inicialización del campo
-    salePriceUsdManual: "", 
+    stockMinimo: "",
+    salePriceUsdManual: "",
   })
 
   // 🚀 Inicialización
@@ -144,6 +149,10 @@ export default function ProductsView() {
         : null,
   }
 
+  // Alertas y valor del inventario, calculados de lo que ya está en memoria:
+  // no cuesta ni una lectura extra.
+  const resumenStock = resumirStock(products)
+
   const previewListPrice = listPrice(draftProduct)
   const previewFinalPrice = divisaPrice(draftProduct, pricing)
   // Los bolívares salen del MISMO precio que se cobra en divisa. Antes salían
@@ -165,7 +174,8 @@ export default function ProductsView() {
         alert("El costo debe ser un número mayor que cero.")
         return
       }
-      if (!Number.isFinite(quantity) || quantity < 0) {
+      // Un servicio no tiene existencias, así que no se le pide cantidad.
+      if (formData.saleType !== "service" && (!Number.isFinite(quantity) || quantity < 0)) {
         alert("La cantidad debe ser un número igual o mayor que cero.")
         return
       }
@@ -185,9 +195,10 @@ export default function ProductsView() {
         input: {
           name: formData.name.trim(),
           category: formData.category,
-          quantity,
+          quantity: Number.isFinite(quantity) ? quantity : 0,
           saleType: formData.saleType,
           barcode: formData.barcode.trim(),
+          stockMinimo: Number.parseInt(formData.stockMinimo, 10) || 0,
           costUsd,
           profit: Number.isFinite(profit) ? profit : 0,
           // Firestore rechaza `undefined`: se manda null, nunca sin valor.
@@ -216,8 +227,8 @@ export default function ProductsView() {
       profit: "",
       saleType: "unit",
       barcode: "",
-      // 🟢 NUEVO: Resetear campo manual
-      salePriceUsdManual: "", 
+      stockMinimo: "",
+      salePriceUsdManual: "",
     })
   }
 
@@ -233,6 +244,7 @@ export default function ProductsView() {
       profit: product.profit?.toString() ?? "",
       saleType: product.saleType,
       barcode: product.barcode || "",
+      stockMinimo: product.stockMinimo ? String(product.stockMinimo) : "",
       // 🟢 NUEVO: Cargar el precio manual al editar
       salePriceUsdManual: product.salePriceUsdManual?.toString() || "", 
     })
@@ -326,6 +338,18 @@ export default function ProductsView() {
         </div>
       </div>
 
+      {/* Lo que reclama atención va antes que los ajustes. */}
+      {!loading && canSeeCosts && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <StockAlertCard
+            resumen={resumenStock}
+            totalProductos={products.length}
+            onVerProducto={handleEditProduct}
+          />
+          {products.length > 0 && <StockValueCard resumen={resumenStock} />}
+        </div>
+      )}
+
       {/* Los ajustes de cobro solo los ve quien puede cambiarlos. */}
       <div className="grid gap-4 lg:grid-cols-2">
         <RateWidget />
@@ -400,14 +424,30 @@ export default function ProductsView() {
                   className="h-10"
                 />
 
-                <Input
-                  type="number"
-                  placeholder="Cantidad disponible (unidades)"
-                  value={formData.quantity}
-                  onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
-                  required
-                  className="h-10"
-                />
+                {/* Un servicio no tiene existencias: reparar un teléfono no
+                    se "agota". Ocultar el campo evita que alguien ponga un 1
+                    y se pregunte por qué no puede vender el segundo. */}
+                {formData.saleType !== "service" && (
+                  <Input
+                    type="number"
+                    placeholder="Cantidad disponible"
+                    value={formData.quantity}
+                    onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
+                    required
+                    className="h-10"
+                  />
+                )}
+
+                {formData.saleType !== "service" && (
+                  <Input
+                    type="number"
+                    min="0"
+                    placeholder="Avisarme cuando queden (opcional)"
+                    value={formData.stockMinimo}
+                    onChange={(e) => setFormData({ ...formData, stockMinimo: e.target.value })}
+                    className="h-10"
+                  />
+                )}
 
                 <Input
                   type="number"
@@ -431,9 +471,9 @@ export default function ProductsView() {
                   onChange={(e) => setFormData({ ...formData, saleType: e.target.value as FormData["saleType"] })}
                   className="px-3 py-2 border border-input rounded-md bg-background h-10"
                 >
-                  <option value="unit">Por Unidad</option>
-                  <option value="weight">Por Peso (Kg)</option>
-                  {/* ELIMINADO: Por Área (m²) */}
+                  <option value="unit">Por unidad</option>
+                  <option value="weight">Por peso (Kg)</option>
+                  <option value="service">Es un servicio (sin inventario)</option>
                 </select>
                 
                 {/* 🟢 NUEVO CAMPO: Precio de Venta Manual en Divisas */}
@@ -605,7 +645,26 @@ export default function ProductsView() {
                           <td className="text-right py-3 px-4 font-semibold tabular-nums">
                             {finalSalePriceBs !== null ? formatBs(finalSalePriceBs) : "—"}
                           </td>
-                          <td className="text-right py-3 px-4">{product.quantity}</td>
+                          <td className="text-right py-3 px-4">
+                            {esServicio(product) ? (
+                              <span className="text-muted-foreground text-xs">servicio</span>
+                            ) : (
+                              <span
+                                className={
+                                  estadoStock(product) === "agotado"
+                                    ? "text-destructive font-semibold"
+                                    : estadoStock(product) === "bajo"
+                                      ? "text-warning-foreground dark:text-warning font-semibold"
+                                      : ""
+                                }
+                              >
+                                {product.quantity}
+                                {estadoStock(product) === "bajo" && product.stockMinimo
+                                  ? ` / ${product.stockMinimo}`
+                                  : ""}
+                              </span>
+                            )}
+                          </td>
                           <td className="py-3 px-4 capitalize">{product.saleType}</td>
                           <td className="py-3 px-4">
                             <div className="flex justify-center gap-2">
@@ -682,7 +741,17 @@ export default function ProductsView() {
 
                       <div>
                         <p className="text-muted-foreground text-xs">Disponibles</p>
-                        <p className="font-medium">{product.quantity}</p>
+                        <p
+                          className={`font-medium ${
+                            estadoStock(product) === "agotado"
+                              ? "text-destructive"
+                              : estadoStock(product) === "bajo"
+                                ? "text-warning-foreground dark:text-warning"
+                                : ""
+                          }`}
+                        >
+                          {esServicio(product) ? "Servicio" : product.quantity}
+                        </p>
                       </div>
                     </div>
 
