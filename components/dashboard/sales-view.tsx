@@ -13,6 +13,7 @@ import { initBarcodeScanner } from "@/lib/barcode-scanner"
 import { useRates } from "@/hooks/use-rates"
 import { getTurnoAbierto } from "@/lib/cash-service"
 import { type SaleType, loadProducts as fetchCatalogo, esServicio } from "@/lib/products-service"
+import { type Cliente, listarClientes, puedeFiar, registrarDeuda } from "@/lib/customers"
 import { reportFirestoreError, reportFirestoreSuccess } from "@/lib/sync-status"
 import { type ReceiptData, printReceipt } from "@/lib/thermal-receipt"
 import { createNumberedDocument, isOfflineError, unnumbered } from "@/lib/document-numbers"
@@ -62,7 +63,14 @@ interface CartItem {
 }
 
 type SinglePaymentMethod = "cash" | "zelle" | "binance" | "debit" | "transfer" | "pagoMovil" | "biopago";
-type PaymentMethod = SinglePaymentMethod | "mixed" 
+/**
+ * `credit` es el fiado: no es una forma de cobrar sino de NO cobrar todavía. Va
+ * en el mismo campo porque es donde se decide qué hacer con el dinero, y así
+ * una venta fiada queda registrada como venta completa —descuenta inventario,
+ * cuenta para el día y numera su documento— con la única diferencia de que en
+ * vez de un movimiento de caja crea una deuda.
+ */
+type PaymentMethod = SinglePaymentMethod | "mixed" | "credit"
 
 // 🔑 NUEVAS INTERFACES PARA DESGLOSE DE PAGO MIXTO
 interface PaymentLine {
@@ -79,7 +87,7 @@ type BreakdownMethod = SinglePaymentMethod; // Alias para claridad
 // ==============================================
 
 export default function SalesView() {
-  const { user, negocioId } = useAuth()
+  const { user, negocioId, allows } = useAuth()
   // Turno de caja activo. La venta queda atada a él para poder cuadrar al
   // cierre; si no hay turno abierto se guarda null y la venta no entra en
   // ningún cuadre (el aviso se muestra arriba del carrito).
@@ -120,6 +128,10 @@ export default function SalesView() {
   const [clientDocumentPrefix, setClientDocumentPrefix] = useState<string>("V")
   const [clientDocumentNumber, setClientDocumentNumber] = useState("") 
   const [clientName, setClientName] = useState("")
+  /** Clientes con su deuda al día, para poder avisar antes de fiar otra vez. */
+  const [clientesConSaldo, setClientesConSaldo] = useState<Cliente[]>([])
+  /** Días de plazo del fiado. Cero es "sin fecha": no todo el fiado tiene plazo. */
+  const [diasPlazo, setDiasPlazo] = useState(15)
   const [clientPhonePrefix, setClientPhonePrefix] = useState<string>("0412")
   const [clientPhoneNumber, setClientPhoneNumber] = useState("") 
   const [clientAddress, setClientAddress] = useState("")
@@ -626,6 +638,31 @@ export default function SalesView() {
   // ==============================================
   // 🛒 Lógica de Checkout FINAL
   // ==============================================
+  // Los clientes se cargan una vez y se quedan: hacen falta para saber cuánto
+  // debe alguien ANTES de fiarle, no después.
+  useEffect(() => {
+    if (!negocioId || !allows("sales.credit")) return
+    let cancelado = false
+
+    listarClientes(negocioId)
+      .then((lista) => {
+        if (!cancelado) setClientesConSaldo(lista)
+      })
+      .catch(() => {
+        // Sin la lista se puede seguir vendiendo al contado; solo se pierde el
+        // aviso de tope. No es motivo para romper el punto de venta.
+      })
+
+    return () => {
+      cancelado = true
+    }
+  }, [negocioId, allows])
+
+  const esFiado = paymentMethod === "credit"
+  const clienteDelFiado = clientesConSaldo.find((c) => c.id === clientId) ?? null
+  const avisoFiado =
+    esFiado && clienteDelFiado ? puedeFiar(clienteDelFiado, totalUsd) : { permitido: true }
+
   const handleCheckout = async () => {
     if (!user) return alert("Usuario no autenticado")
     if (cart.length === 0) return alert("El carrito está vacío")
@@ -643,6 +680,20 @@ export default function SalesView() {
     const currentDocument = fullClientDocument;
     const currentPhone = fullClientPhone;
     const isClientDataEntered = currentDocument.length >= 6 && clientName.trim().length > 0;
+    // Fiar exige saber A QUIÉN. Una deuda sin cliente identificado es un
+    // apunte que no se puede cobrar: no hay a quién llamar ni contra qué saldo
+    // aplicarla.
+    if (esFiado) {
+      if (!clientId && !isClientDataEntered) {
+        return alert(
+          "Para fiar hace falta identificar al cliente.\n\nBúscalo por su cédula, o escribe su nombre y su documento para registrarlo.",
+        )
+      }
+
+      if (!avisoFiado.permitido) {
+        return alert(`No se le puede fiar a este cliente.\n\n${avisoFiado.motivo}`)
+      }
+    }
 
     if (paymentMethod === "mixed") {
         
@@ -660,8 +711,14 @@ export default function SalesView() {
             return alert(`Error en el cálculo del pago mixto. La suma de los pagos (${sum.toFixed(2)} Bs) no cubre el total (${roundedTotal.toFixed(2)} Bs).\nFaltan por cubrir: Bs ${(totalBs - totalCoveredBs).toFixed(2)}`);
     }
 
+    // El fiado se confirma con otras palabras a propósito: "confirmar la venta"
+    // suena a que entró el dinero, y aquí no entra nada.
     const confirmation = window.confirm(
-      `¿Estás seguro de confirmar la venta?\n\nTotal a Pagar:\nUSD: $${totalUsd.toFixed(2)}\nBs: Bs ${totalBs.toFixed(2)}`
+      esFiado
+        ? `Vas a ENTREGAR SIN COBRAR por ${totalUsd.toFixed(2)} $.\n\nQueda como deuda de ${clientName || "el cliente"}${
+            diasPlazo > 0 ? `, con ${diasPlazo} días de plazo` : ", sin fecha de pago"
+          }.\n\n¿Seguimos?`
+        : `¿Estás seguro de confirmar la venta?\n\nTotal a Pagar:\nUSD: $${totalUsd.toFixed(2)}\nBs: Bs ${totalBs.toFixed(2)}`
     );
 
     if (!confirmation) {
@@ -779,6 +836,7 @@ export default function SalesView() {
       // guarda igual pero sin número, marcada como pendiente. Nunca se inventa
       // un número provisional: uno que después cambia es peor que ninguno.
       let numeroAsignado: string | null = null
+      let ventaCreadaId: string | null = null
 
       // Costo de la mercancía en el momento de la venta, para poder calcular
       // después la utilidad y la reposición. Va en su propio documento porque
@@ -813,6 +871,7 @@ export default function SalesView() {
           extraDocs: costoVenta,
         })
         numeroAsignado = creada.numeroDocumento
+        ventaCreadaId = creada.id
       } catch (error) {
         if (!isOfflineError(error)) throw error
 
@@ -823,6 +882,37 @@ export default function SalesView() {
           ...unnumbered("nota_entrega"),
         })
         reportFirestoreError(error)
+      }
+
+      // Fiado: la venta ya está registrada, ahora se anota la deuda.
+      //
+      // Va DESPUÉS y no dentro de la transacción de la venta porque la deuda
+      // toca el saldo del cliente, y meter ese documento en la transacción del
+      // correlativo obligaría a leerlo dentro de ella. Si esto fallara quedaría
+      // una venta cobrada como fiada sin su deuda, así que se avisa en voz
+      // alta: es lo único de todo el cobro que el cajero tendría que arreglar
+      // a mano.
+      if (esFiado && currentClientId) {
+        try {
+          const vence = new Date()
+          vence.setDate(vence.getDate() + diasPlazo)
+
+          await registrarDeuda({
+            negocioId: negocioId ?? user.uid,
+            clienteId: currentClientId,
+            clienteNombre: clientName || "Cliente",
+            ventaId: ventaCreadaId ?? undefined,
+            numeroDocumento: numeroAsignado ?? undefined,
+            montoUsd: totalUsd,
+            venceEn: diasPlazo > 0 ? vence : null,
+            creadoPor: user.uid,
+          })
+        } catch (error) {
+          reportFirestoreError(error)
+          alert(
+            `LA VENTA SE GUARDÓ, PERO LA DEUDA NO.\n\nAnótala a mano en Clientes: ${clientName} debe ${totalUsd.toFixed(2)} $.`,
+          )
+        }
       }
 
       // 3. Descontar el inventario.
@@ -1362,8 +1452,54 @@ export default function SalesView() {
                       <option value="pagoMovil">Pago Móvil</option>
                       <option value="biopago">Biopago</option> 
                       <option value="mixed">Mixto (Múltiples Pagos)</option>
+                      {/* Fiar es dar mercancía sin cobrar, así que va detrás de
+                          su propio permiso y separado del resto de la lista. */}
+                      {allows("sales.credit") && <option value="credit">Fiado (queda a deber)</option>}
                     </select>
                   </div>
+
+                  {esFiado && (
+                    <div className="border-warning/40 bg-warning/5 space-y-3 rounded-md border p-3">
+                      <p className="text-sm font-medium">
+                        No entra dinero: queda como deuda del cliente.
+                      </p>
+
+                      <div>
+                        <label className="text-sm font-medium" htmlFor="plazo-fiado">
+                          Plazo para pagar
+                        </label>
+                        <select
+                          id="plazo-fiado"
+                          value={diasPlazo}
+                          onChange={(e) => setDiasPlazo(Number(e.target.value))}
+                          className="border-input bg-background mt-1.5 w-full rounded-md border px-3 py-2 text-sm"
+                        >
+                          <option value={7}>Una semana</option>
+                          <option value={15}>Quince días</option>
+                          <option value={30}>Un mes</option>
+                          <option value={0}>Sin fecha</option>
+                        </select>
+                      </div>
+
+                      {/* El saldo actual del cliente, antes de fiarle más. Es
+                          el dato que decide si esta venta se hace o no. */}
+                      {clienteDelFiado ? (
+                        <p className="text-muted-foreground text-xs">
+                          {clienteDelFiado.saldoDeudaUsd > 0
+                            ? `Ya te debe ${formatMoney(clienteDelFiado.saldoDeudaUsd)}. Con esta venta pasaría a ${formatMoney(clienteDelFiado.saldoDeudaUsd + totalUsd)}.`
+                            : "Este cliente no te debe nada ahora mismo."}
+                        </p>
+                      ) : (
+                        <p className="text-muted-foreground text-xs">
+                          Busca al cliente por su cédula para ver cuánto debe ya.
+                        </p>
+                      )}
+
+                      {!avisoFiado.permitido && (
+                        <p className="text-destructive text-xs font-medium">{avisoFiado.motivo}</p>
+                      )}
+                    </div>
+                  )}
 
                   {/* 🔑 Bloque Unificado de Pago Mixto (AQUÍ ESTÁ LA CORRECCIÓN DEL BOTÓN) */}
                   {paymentMethod === "mixed" && (
@@ -1526,7 +1662,7 @@ export default function SalesView() {
                   <Button
                     onClick={handleCheckout}
                     // Deshabilitar si es pago mixto y aún queda un restante significativo
-                    disabled={cart.length === 0 || !Number.isFinite(totalUsd) || !Number.isFinite(totalBs) || isClientSearching || (paymentMethod === "mixed" && safeRemainingBs > 0.02)}
+                    disabled={cart.length === 0 || !Number.isFinite(totalUsd) || !Number.isFinite(totalBs) || isClientSearching || (paymentMethod === "mixed" && safeRemainingBs > 0.02) || (esFiado && !avisoFiado.permitido)}
                     className="w-full bg-accent hover:bg-accent/90"
                   >
                     Confirmar Venta

@@ -622,3 +622,405 @@ describe("Tesorería: el cajero no ve dónde está el dinero", () => {
     await assertFails(getDoc(doc(ctx(DUENO_B), "gastos", "gasto-a")))
   })
 })
+
+// ===========================================================================
+// Roles creados por el dueño
+//
+// Desde que los roles son documentos, lo que autoriza es la lista de permisos
+// copiada en usuarios/{uid}.permisos, no el nombre del rol. Estas pruebas
+// cubren lo que esa copia hace posible y, sobre todo, lo que sigue impidiendo.
+// ===========================================================================
+
+const DUENO_C = "dueno-c" // negocio con la suscripción vencida
+const EMPLEADO_C = "empleado-c"
+
+const DUENO_D = "dueno-d"
+const VENDEDOR_D = "vendedor-d" // permisos mínimos de mostrador
+const GERENTE_D = "gerente-d" // con users.manage y cobros
+
+/** Contexto con correo en el token: lo exigen las reglas de invitaciones. */
+function ctxEmail(uid, email) {
+  return testEnv.authenticatedContext(uid, { email_verified: true, email }).firestore()
+}
+
+describe("roles por documento, invitaciones y fiado", () => {
+  before(async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore()
+      const dentroDeUnAno = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
+      const anteayer = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)
+
+      // Negocio C: el dueño dejó de pagar.
+      await setDoc(doc(db, "usuarios", DUENO_C), {
+        email: "dueno@c.com",
+        negocioId: DUENO_C,
+        role: "owner",
+        plan: "mensual",
+        isActive: true,
+        subscriptionEndsAt: anteayer,
+      })
+
+      // Su empleado tiene fechas propias en regla: si algo lo deja fuera tiene
+      // que ser la suscripción del negocio, no la suya.
+      await setDoc(doc(db, "usuarios", EMPLEADO_C), {
+        email: "empleado@c.com",
+        negocioId: DUENO_C,
+        role: "staff",
+        plan: "mensual",
+        isActive: true,
+        permisos: ["sales.create", "products.view"],
+        subscriptionEndsAt: dentroDeUnAno,
+      })
+
+      // Negocio D, al día.
+      await setDoc(doc(db, "usuarios", DUENO_D), {
+        email: "dueno@d.com",
+        negocioId: DUENO_D,
+        role: "owner",
+        plan: "mensual",
+        isActive: true,
+        subscriptionEndsAt: dentroDeUnAno,
+      })
+
+      await setDoc(doc(db, "usuarios", VENDEDOR_D), {
+        email: "vendedor@d.com",
+        negocioId: DUENO_D,
+        role: "staff",
+        rolId: "rol-mostrador",
+        rolNombre: "Mostrador",
+        permisos: ["sales.create", "products.view", "customers.view"],
+        plan: "mensual",
+        isActive: true,
+      })
+
+      await setDoc(doc(db, "usuarios", GERENTE_D), {
+        email: "gerente@d.com",
+        negocioId: DUENO_D,
+        role: "staff",
+        rolId: "rol-gerencia",
+        rolNombre: "Gerencia",
+        permisos: [
+          "sales.create",
+          "sales.credit",
+          "products.view",
+          "customers.view",
+          "customers.manage",
+          "receivables.collect",
+          "users.manage",
+        ],
+        plan: "mensual",
+        isActive: true,
+      })
+
+      await setDoc(doc(db, "roles", "rol-mostrador"), {
+        negocioId: DUENO_D,
+        nombre: "Mostrador",
+        permisos: ["sales.create", "products.view", "customers.view"],
+      })
+
+      await setDoc(doc(db, "productos", "producto-d"), {
+        negocioId: DUENO_D,
+        name: "Harina",
+        quantity: 20,
+        precioUsd: 1.5,
+      })
+
+      await setDoc(doc(db, "productos_costos", "producto-d"), {
+        negocioId: DUENO_D,
+        productoId: "producto-d",
+        costUsd: 0.9,
+        profit: 40,
+      })
+
+      await setDoc(doc(db, "clientes", "cliente-d"), {
+        negocioId: DUENO_D,
+        nombre: "Yorbis",
+        saldoDeudaUsd: 50,
+        limiteCreditoUsd: 0,
+        activo: true,
+      })
+
+      await setDoc(doc(db, "cuentas_cobrar", "deuda-d"), {
+        negocioId: DUENO_D,
+        clienteId: "cliente-d",
+        clienteNombre: "Yorbis",
+        montoUsd: 50,
+        abonadoUsd: 0,
+        saldoUsd: 50,
+        estado: "pendiente",
+        fecha: new Date(),
+        creadoPor: GERENTE_D,
+      })
+
+      await setDoc(doc(db, "invitaciones", "invitacion-d"), {
+        negocioId: DUENO_D,
+        negocioNombre: "Bodega D",
+        email: "nuevo@d.com",
+        rolId: "rol-mostrador",
+        rolNombre: "Mostrador",
+        permisos: ["sales.create", "products.view", "customers.view"],
+        estado: "pendiente",
+        creadaEn: new Date(),
+      })
+    })
+  })
+
+  // --- la lista de permisos manda -----------------------------------------
+
+  it("quien tiene products.view lee el producto pero NO su costo", async () => {
+    await assertSucceeds(getDoc(doc(ctx(VENDEDOR_D), "productos", "producto-d")))
+    await assertFails(getDoc(doc(ctx(VENDEDOR_D), "productos_costos", "producto-d")))
+  })
+
+  it("sin products.edit no se puede tocar el catálogo", async () => {
+    await assertFails(updateDoc(doc(ctx(VENDEDOR_D), "productos", "producto-d"), { name: "Otra" }))
+  })
+
+  it("vender sí baja el stock, aunque no se pueda editar el producto", async () => {
+    await assertSucceeds(
+      updateDoc(doc(ctx(VENDEDOR_D), "productos", "producto-d"), { quantity: 19 }),
+    )
+  })
+
+  it("subir el stock sigue siendo ajustar, y eso pide su permiso", async () => {
+    await assertFails(updateDoc(doc(ctx(VENDEDOR_D), "productos", "producto-d"), { quantity: 99 }))
+  })
+
+  // --- nadie se reparte permisos a sí mismo --------------------------------
+
+  it("nadie puede añadirse permisos en su propio documento", async () => {
+    await assertFails(
+      updateDoc(doc(ctx(VENDEDOR_D), "usuarios", VENDEDOR_D), {
+        permisos: ["costs.view", "sales.create"],
+      }),
+    )
+  })
+
+  it("nadie puede cambiarse el rol ni el negocio", async () => {
+    await assertFails(updateDoc(doc(ctx(VENDEDOR_D), "usuarios", VENDEDOR_D), { role: "owner" }))
+    await assertFails(updateDoc(doc(ctx(VENDEDOR_D), "usuarios", VENDEDOR_D), { negocioId: NEGOCIO_A }))
+  })
+
+  it("sí puede editar sus propias preferencias", async () => {
+    await assertSucceeds(
+      updateDoc(doc(ctx(VENDEDOR_D), "usuarios", VENDEDOR_D), { telefono: "0414-0000000" }),
+    )
+  })
+
+  // --- gestionar el equipo -------------------------------------------------
+
+  it("sin users.manage no se pueden crear roles", async () => {
+    await assertFails(
+      setDoc(doc(ctx(VENDEDOR_D), "roles", "rol-colado"), {
+        negocioId: DUENO_D,
+        nombre: "Colado",
+        permisos: ["costs.view"],
+      }),
+    )
+  })
+
+  it("con users.manage sí, y se le pueden cambiar los permisos a otro", async () => {
+    await assertSucceeds(
+      setDoc(doc(ctx(GERENTE_D), "roles", "rol-deposito"), {
+        negocioId: DUENO_D,
+        nombre: "Depósito",
+        permisos: ["products.view"],
+      }),
+    )
+
+    await assertSucceeds(
+      updateDoc(doc(ctx(GERENTE_D), "usuarios", VENDEDOR_D), {
+        rolId: "rol-deposito",
+        rolNombre: "Depósito",
+        permisos: ["products.view"],
+      }),
+    )
+  })
+
+  it("quien gestiona el equipo NO puede tocar al dueño", async () => {
+    await assertFails(
+      updateDoc(doc(ctx(GERENTE_D), "usuarios", DUENO_D), { isActive: false }),
+    )
+  })
+
+  it("quien gestiona el equipo NO puede fabricar otro dueño", async () => {
+    await assertFails(updateDoc(doc(ctx(GERENTE_D), "usuarios", VENDEDOR_D), { role: "owner" }))
+  })
+
+  it("no se puede alargar el plan de nadie desde la gestión del equipo", async () => {
+    await assertFails(
+      updateDoc(doc(ctx(GERENTE_D), "usuarios", VENDEDOR_D), {
+        subscriptionEndsAt: new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000),
+      }),
+    )
+  })
+
+  it("los roles de un negocio no se ven desde otro", async () => {
+    await assertFails(getDoc(doc(ctx(DUENO_A), "roles", "rol-mostrador")))
+  })
+
+  // --- invitaciones --------------------------------------------------------
+
+  it("el destinatario puede leer su invitación aunque no sea de ese negocio", async () => {
+    const invitaciones = query(
+      collection(ctxEmail("nuevo-d", "nuevo@d.com"), "invitaciones"),
+      where("email", "==", "nuevo@d.com"),
+      where("estado", "==", "pendiente"),
+    )
+    await assertSucceeds(getDocs(invitaciones))
+  })
+
+  it("nadie más puede leer la invitación de otro", async () => {
+    await assertFails(
+      getDoc(doc(ctxEmail("intruso", "intruso@x.com"), "invitaciones", "invitacion-d")),
+    )
+  })
+
+  it("una invitación no se puede reabrir para colar a otra persona", async () => {
+    await assertFails(
+      updateDoc(doc(ctxEmail("nuevo-d", "nuevo@d.com"), "invitaciones", "invitacion-d"), {
+        email: "otro@d.com",
+        estado: "pendiente",
+      }),
+    )
+  })
+
+  it("el alta con invitación tiene que calcar el negocio, el rol y los permisos", async () => {
+    const comoInvitado = ctxEmail("nuevo-d", "nuevo@d.com")
+
+    // Con más permisos de los que le dieron: denegado.
+    await assertFails(
+      setDoc(doc(comoInvitado, "usuarios", "nuevo-d"), {
+        email: "nuevo@d.com",
+        negocioId: DUENO_D,
+        role: "staff",
+        rolId: "rol-mostrador",
+        permisos: ["sales.create", "products.view", "customers.view", "costs.view"],
+        invitacionId: "invitacion-d",
+        plan: "trial",
+      }),
+    )
+
+    // Colándose como dueño del negocio ajeno: denegado.
+    await assertFails(
+      setDoc(doc(comoInvitado, "usuarios", "nuevo-d"), {
+        email: "nuevo@d.com",
+        negocioId: DUENO_D,
+        role: "owner",
+        plan: "trial",
+      }),
+    )
+
+    // Exactamente lo que dice la invitación: entra.
+    await assertSucceeds(
+      setDoc(doc(comoInvitado, "usuarios", "nuevo-d"), {
+        email: "nuevo@d.com",
+        negocioId: DUENO_D,
+        role: "staff",
+        rolId: "rol-mostrador",
+        rolNombre: "Mostrador",
+        permisos: ["sales.create", "products.view", "customers.view"],
+        invitacionId: "invitacion-d",
+        plan: "trial",
+      }),
+    )
+  })
+
+  // --- la suscripción del negocio manda ------------------------------------
+
+  it("si el negocio dejó de pagar, su empleado tampoco entra", async () => {
+    await assertFails(getDoc(doc(ctx(EMPLEADO_C), "productos", "producto-d")))
+  })
+
+  // --- fiado ---------------------------------------------------------------
+
+  it("sin sales.credit no se puede fiar", async () => {
+    await assertFails(
+      setDoc(doc(ctx(VENDEDOR_D), "cuentas_cobrar", "deuda-colada"), {
+        negocioId: DUENO_D,
+        clienteId: "cliente-d",
+        clienteNombre: "Yorbis",
+        montoUsd: 30,
+        abonadoUsd: 0,
+        saldoUsd: 30,
+        estado: "pendiente",
+        fecha: new Date(),
+        creadoPor: VENDEDOR_D,
+      }),
+    )
+  })
+
+  it("una deuda no puede nacer ya abonada", async () => {
+    await assertFails(
+      setDoc(doc(ctx(GERENTE_D), "cuentas_cobrar", "deuda-trucada"), {
+        negocioId: DUENO_D,
+        clienteId: "cliente-d",
+        clienteNombre: "Yorbis",
+        montoUsd: 30,
+        abonadoUsd: 30,
+        saldoUsd: 0,
+        estado: "pagada",
+        fecha: new Date(),
+        creadoPor: GERENTE_D,
+      }),
+    )
+  })
+
+  it("no se puede cambiar el importe de una deuda ya registrada", async () => {
+    await assertFails(
+      updateDoc(doc(ctx(GERENTE_D), "cuentas_cobrar", "deuda-d"), { montoUsd: 5 }),
+    )
+  })
+
+  it("no se puede desabonar una deuda", async () => {
+    await assertFails(
+      updateDoc(doc(ctx(GERENTE_D), "cuentas_cobrar", "deuda-d"), {
+        abonadoUsd: -10,
+        saldoUsd: 60,
+      }),
+    )
+  })
+
+  it("quien cobra sí puede abonar, y el abono queda inmutable", async () => {
+    await assertSucceeds(
+      updateDoc(doc(ctx(GERENTE_D), "cuentas_cobrar", "deuda-d"), {
+        abonadoUsd: 20,
+        saldoUsd: 30,
+        estado: "parcial",
+      }),
+    )
+
+    await assertSucceeds(
+      setDoc(doc(ctx(GERENTE_D), "abonos", "abono-d"), {
+        negocioId: DUENO_D,
+        clienteId: "cliente-d",
+        cuentaCobrarId: "deuda-d",
+        montoUsd: 20,
+        metodo: "cash",
+        fecha: new Date(),
+        registradoPor: GERENTE_D,
+      }),
+    )
+
+    await assertFails(updateDoc(doc(ctx(GERENTE_D), "abonos", "abono-d"), { montoUsd: 999 }))
+    await assertFails(deleteDoc(doc(ctx(GERENTE_D), "abonos", "abono-d")))
+  })
+
+  it("un abono no se puede registrar a nombre de otro", async () => {
+    await assertFails(
+      setDoc(doc(ctx(GERENTE_D), "abonos", "abono-falso"), {
+        negocioId: DUENO_D,
+        clienteId: "cliente-d",
+        cuentaCobrarId: "deuda-d",
+        montoUsd: 5,
+        metodo: "cash",
+        fecha: new Date(),
+        registradoPor: DUENO_D,
+      }),
+    )
+  })
+
+  it("las deudas de un negocio no se ven desde otro", async () => {
+    await assertFails(getDoc(doc(ctx(DUENO_A), "cuentas_cobrar", "deuda-d")))
+  })
+})

@@ -61,6 +61,62 @@ service cloud.firestore {
     function isOwner() { return myRole() == 'owner'; }
     function isAdmin() { return myRole() in ['owner', 'admin']; }
 
+    // El correo del token, en minúsculas y sin reventar si no viene ninguno.
+    function miCorreo() {
+      return request.auth.token.get('email', '').lower();
+    }
+
+    // La lista de permisos del usuario, copiada de su rol al asignárselo.
+    //
+    // Se guarda DENTRO del documento del usuario a propósito. Ir a buscar
+    // roles/{id} costaría una lectura extra en cada venta, cada consulta y
+    // cada guardado; el documento del usuario ya se lee aquí de todas formas.
+    // El precio es reescribir a los miembros cuando cambia el rol, y eso pasa
+    // una vez al mes. Ver lib/roles.ts.
+    function myPermisos() {
+      return userDoc().get('permisos', []);
+    }
+
+    // Cuentas anteriores a los roles por documento: no tienen lista, así que se
+    // resuelve desde el rol que tenían entonces. Sin esto se quedarían sin poder
+    // hacer nada de un día para otro, sin que nadie les hubiera quitado ningún
+    // permiso.
+    function permisoHeredado(permiso) {
+      return myRole() == 'admin'
+        ? !(permiso in ['users.manage', 'plan.manage'])
+        : permiso in ['sales.create', 'sales.void', 'products.view',
+                      'customers.view', 'cash.openShift', 'cash.closeOwnShift',
+                      'cash.movements'];
+    }
+
+    // El dueño lo puede todo por definición: es el único que no se consulta en
+    // ninguna lista. Si pudiera recortarse permisos a sí mismo se quedaría fuera
+    // de su propio negocio sin nadie que se los devolviera.
+    function puede(permiso) {
+      return isOwner()
+        || (myPermisos().size() > 0
+              ? myPermisos().hasAny([permiso])
+              : permisoHeredado(permiso));
+    }
+
+    // El alta de un empleado tiene que calcar su invitación: mismo negocio,
+    // mismo rol y mismos permisos. Sin esta comprobación, tener una invitación
+    // a un negocio bastaría para entrar en él como dueño.
+    function invitacion() {
+      return get(/databases/$(database)/documents/invitaciones/$(request.resource.data.get('invitacionId', 'x'))).data;
+    }
+
+    function uneteConInvitacion() {
+      return request.resource.data.get('invitacionId', '') != ''
+        && exists(/databases/$(database)/documents/invitaciones/$(request.resource.data.invitacionId))
+        && invitacion().estado == 'pendiente'
+        && invitacion().email == miCorreo()
+        && request.resource.data.negocioId == invitacion().negocioId
+        && request.resource.data.rolId == invitacion().rolId
+        && request.resource.data.permisos == invitacion().permisos
+        && request.resource.data.role == 'staff';
+    }
+
     // La cuenta tiene que estar activa y sin vencer.
     //
     // `subscriptionEndsAt` manda sobre `trialEndsAt`: cuando alguien paga, su
@@ -69,8 +125,26 @@ service cloud.firestore {
     // cuenta creada antes de que existiera este campo.
     function subscriptionActive() {
       let u = userDoc();
-      let vence = u.get('subscriptionEndsAt', u.get('trialEndsAt', null));
-      return u.get('isActive', true) == true
+
+      // Un empleado no tiene suscripción propia: la que manda es la del
+      // negocio, y el documento del negocio es el del dueño, porque `negocioId`
+      // ES su uid. Sin esto, un comercio con el plan vencido seguiría entrando
+      // todos los días por la cuenta de sus cajeros.
+      // Si el negocio no tiene documento propio manda el del usuario. Pasa en
+      // las cuentas antiguas, donde `negocioId` no era el uid del dueño: dejar
+      // a alguien fuera por un dato que él no controla sería peor que el riesgo
+      // que esto abre, que es el de una cuenta suelta sin negocio detrás.
+      let cuenta = (u.get('role', 'staff') == 'owner'
+                    || !exists(/databases/$(database)/documents/usuarios/$(u.get('negocioId', request.auth.uid))))
+        ? u
+        : get(/databases/$(database)/documents/usuarios/$(u.get('negocioId', request.auth.uid))).data;
+
+      let vence = cuenta.get('subscriptionEndsAt', cuenta.get('trialEndsAt', null));
+
+      // Las dos banderas: la del negocio (impago) y la de la persona (el dueño
+      // le quitó el acceso). Cualquiera de las dos cierra la puerta.
+      return cuenta.get('isActive', true) == true
+        && u.get('isActive', true) == true
         && (vence == null || vence > request.time);
     }
 
@@ -118,23 +192,34 @@ service cloud.firestore {
       // validar el código. Ahí estaba el agujero — el navegador escribía
       // plan:"complete" y se saltaba el pago.
       //
-      // A los empleados los crea el dueño con la regla de abajo.
+      // Un empleado no lo crea el dueño: crear la cuenta de otro desde el
+      // navegador lo sacaría de la suya. Se invita, y la persona se registra
+      // sola con su propio correo; entonces vale la segunda rama.
       allow create: if signedIn()
                     && request.auth.uid == uid
-                    && request.resource.data.get('role', 'owner') == 'owner'
-                    && request.resource.data.get('negocioId', uid) == uid
-                    && request.resource.data.get('plan', 'trial') == 'trial';
+                    && request.resource.data.get('plan', 'trial') == 'trial'
+                    && (
+                         (request.resource.data.get('role', 'owner') == 'owner'
+                          && request.resource.data.get('negocioId', uid) == uid)
+                         || uneteConInvitacion()
+                       );
 
       // Cada quien edita sus preferencias, pero jamás su rol, su plan, su
       // negocio ni la fecha de fin de prueba. Ahí estaba el agujero: el
       // navegador escribía plan:"complete" y se saltaba el pago.
+      // `permisos` y `rolId` entran en la lista: quien pudiera editarse sus
+      // propios permisos se daría acceso a los costos en dos clics.
       allow update: if signedIn()
                     && request.auth.uid == uid
-                    && notChanging(['role', 'plan', 'negocioId', 'trialEndsAt', 'subscriptionEndsAt', 'isActive', 'exclusiveCode']);
+                    && notChanging(['role', 'rolId', 'rolNombre', 'permisos', 'plan', 'negocioId', 'trialEndsAt', 'subscriptionEndsAt', 'isActive', 'exclusiveCode']);
 
-      // El dueño gestiona a su equipo, pero no puede crear otro dueño.
-      allow update: if member() && isOwner() && mine(resource)
-                    && request.resource.data.role in ['admin', 'cashier'];
+      // Quien gestiona el equipo reparte roles, pero no puede tocar al dueño ni
+      // fabricar otro: ni para ascender a nadie, ni para dejar al dueño sin
+      // acceso a su propio negocio.
+      allow update: if member() && puede('users.manage') && mine(resource)
+                    && resource.data.get('role', 'staff') != 'owner'
+                    && request.resource.data.get('role', 'staff') != 'owner'
+                    && notChanging(['plan', 'negocioId', 'trialEndsAt', 'subscriptionEndsAt', 'exclusiveCode']);
 
       // El super-admin activa cuentas y mueve vencimientos: es lo único que
       // hace falta para cobrar suscripciones a mano.
@@ -149,7 +234,7 @@ service cloud.firestore {
     match /negocios/{negocioId} {
       allow read: if member() && negocioId == myNegocio();
       allow create: if member() && request.resource.data.ownerUid == request.auth.uid;
-      allow update: if member() && isAdmin() && negocioId == myNegocio();
+      allow update: if member() && puede('business.settings') && negocioId == myNegocio();
       allow delete: if false;
     }
 
@@ -173,8 +258,12 @@ service cloud.firestore {
     // ------------------------------------------------------------------
     match /productos/{productoId} {
       allow read: if member() && mine(resource);
-      allow create: if member() && isAdmin() && staysMine();
-      allow update: if member() && isAdmin() && mine(resource) && staysMine();
+      allow create: if member() && puede('products.create') && staysMine();
+      allow update: if member() && puede('products.edit') && mine(resource) && staysMine();
+
+      // Ajustar existencias es un permiso aparte del de editar: quien puede
+      // cuadrar el stock puede tapar un faltante.
+      allow update: if member() && puede('products.adjustStock') && mine(resource) && staysMine();
 
       // El cajero descuenta inventario al vender. Solo puede tocar `quantity`,
       // solo hacia abajo y sin dejarlo en negativo: eso es vender. Subirlo
@@ -184,28 +273,28 @@ service cloud.firestore {
                     && request.resource.data.quantity < resource.data.quantity
                     && request.resource.data.quantity >= 0;
 
-      allow delete: if member() && isAdmin() && mine(resource);
+      allow delete: if member() && puede('products.delete') && mine(resource);
     }
 
     // Costo y margen de cada producto. El identificador es el mismo que el del
     // producto, para poder emparejarlos sin una consulta extra.
     match /productos_costos/{productoId} {
-      allow read: if member() && isAdmin() && mine(resource);
-      allow write: if member() && isAdmin() && staysMine();
+      allow read: if member() && puede('costs.view') && mine(resource);
+      allow write: if member() && puede('prices.edit') && staysMine();
     }
 
     // Costo de la mercancía en el momento de cada venta, que es lo que permite
     // calcular la utilidad y la reposición. El cajero lo ESCRIBE al vender
     // (necesita dejar constancia) pero no puede leerlo después.
     match /ventas_costos/{ventaId} {
-      allow read: if member() && isAdmin() && mine(resource);
+      allow read: if member() && puede('costs.view') && mine(resource);
       allow create: if member() && staysMine();
       allow update, delete: if false;
     }
 
     match /categorias/{categoriaId} {
       allow read: if member() && mine(resource);
-      allow write: if member() && isAdmin() && staysMine();
+      allow write: if member() && puede('products.edit') && staysMine();
     }
 
     // ------------------------------------------------------------------
@@ -214,10 +303,20 @@ service cloud.firestore {
     // borrarlo.
     // ------------------------------------------------------------------
     match /clientes/{clienteId} {
-      allow read: if member() && mine(resource);
-      allow create: if member() && staysMine();
-      allow update: if member() && mine(resource) && staysMine();
-      allow delete: if member() && isAdmin() && mine(resource);
+      allow read: if member() && puede('customers.view') && mine(resource);
+      allow create: if member() && staysMine()
+                    && (puede('customers.manage') || puede('sales.create'));
+
+      // `receivables.collect` y `sales.credit` entran aquí porque el saldo de
+      // deuda del cliente se mueve con increment() en el MISMO lote que la
+      // deuda o el abono. Sin ellos, fiar o cobrar fallaría a mitad de lote y
+      // dejaría una deuda que no suma en ningún resumen.
+      allow update: if member() && mine(resource) && staysMine()
+                    && (puede('customers.manage')
+                        || puede('receivables.collect')
+                        || puede('sales.credit'));
+
+      allow delete: if false; // se desactivan: sus ventas y deudas apuntan aquí
     }
 
     // ------------------------------------------------------------------
@@ -230,9 +329,10 @@ service cloud.firestore {
     match /ventas/{ventaId} {
       allow read: if member() && mine(resource)
                   // El cajero solo ve sus propias ventas; el encargado, todas.
-                  && (isAdmin() || resource.data.get('cajeroUid', '') == request.auth.uid);
+                  && (puede('sales.viewAll') || resource.data.get('cajeroUid', '') == request.auth.uid);
 
       allow create: if member()
+                    && puede('sales.create')
                     && staysMine()
                     && request.resource.data.cajeroUid == request.auth.uid
                     && request.resource.data.get('anulada', false) == false;
@@ -296,14 +396,14 @@ service cloud.firestore {
     match /cuentas/{cuentaId} {
       // Ver dónde está el dinero es cosa de encargados y dueños. Un cajero no
       // tiene por qué saber cuánto hay en el banco.
-      allow read: if member() && isAdmin() && mine(resource);
-      allow create: if member() && isAdmin() && staysMine();
+      allow read: if member() && puede('accounts.view') && mine(resource);
+      allow create: if member() && puede('accounts.manage') && staysMine();
       allow update: if member() && mine(resource) && staysMine();
       allow delete: if false; // se desactivan
     }
 
     match /movimientos/{movimientoId} {
-      allow read: if member() && isAdmin() && mine(resource);
+      allow read: if member() && puede('accounts.view') && mine(resource);
       allow create: if member() && staysMine()
                     && request.resource.data.creadoPor == request.auth.uid;
       // Un movimiento no se retoca. Si se registró mal, se corrige con otro
@@ -315,20 +415,20 @@ service cloud.firestore {
     // gastos · proveedores
     // ------------------------------------------------------------------
     match /gastos/{gastoId} {
-      allow read: if member() && isAdmin() && mine(resource);
-      allow create: if member() && staysMine()
+      allow read: if member() && puede('expenses.view') && mine(resource);
+      allow create: if member() && puede('expenses.create') && staysMine()
                     && request.resource.data.creadoPor == request.auth.uid;
       // Solo se puede apagar la recurrencia de un gasto fijo; el importe y el
       // concepto quedan como se registraron.
-      allow update: if member() && isAdmin() && mine(resource)
+      allow update: if member() && puede('expenses.create') && mine(resource)
                     && notChanging(['montoUsd', 'montoBs', 'tipo', 'fecha', 'creadoPor']);
       allow delete: if false;
     }
 
     match /proveedores/{proveedorId} {
       allow read: if member() && mine(resource);
-      allow create: if member() && isAdmin() && staysMine();
-      allow update: if member() && isAdmin() && mine(resource) && staysMine();
+      allow create: if member() && puede('expenses.create') && staysMine();
+      allow update: if member() && puede('expenses.create') && mine(resource) && staysMine();
       allow delete: if false; // se desactivan, para no romper el histórico
     }
 
@@ -337,9 +437,10 @@ service cloud.firestore {
     // ------------------------------------------------------------------
     match /turnos/{turnoId} {
       allow read: if member() && mine(resource)
-                  && (isAdmin() || resource.data.get('cajeroUid', '') == request.auth.uid);
+                  && (puede('cash.closeAnyShift') || resource.data.get('cajeroUid', '') == request.auth.uid);
 
       allow create: if member()
+                    && puede('cash.openShift')
                     && staysMine()
                     && request.resource.data.cajeroUid == request.auth.uid
                     && request.resource.data.estado == 'abierto';
@@ -348,7 +449,9 @@ service cloud.firestore {
       // (para cuando el cajero se fue sin cerrar).
       allow update: if member() && mine(resource)
                     && resource.data.estado == 'abierto'
-                    && (isAdmin() || resource.data.cajeroUid == request.auth.uid);
+                    && (puede('cash.closeAnyShift')
+                        || (puede('cash.closeOwnShift')
+                            && resource.data.cajeroUid == request.auth.uid));
 
       allow delete: if false;
     }
@@ -369,9 +472,101 @@ service cloud.firestore {
     // una bitácora editable no sirve para auditar a nadie.
     // ------------------------------------------------------------------
     match /auditoria/{registroId} {
-      allow read: if member() && isAdmin() && mine(resource);
+      allow read: if member() && puede('reports.view') && mine(resource);
       allow create: if member() && staysMine()
                     && request.resource.data.actorUid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // roles
+    //
+    // Los roles que crea el dueño. Este documento es la fuente de verdad para
+    // EDITAR; lo que de verdad autoriza es la copia que vive en
+    // usuarios/{uid}.permisos, porque es la que estas reglas pueden consultar
+    // sin pagar una lectura extra en cada operación. Ver lib/roles.ts.
+    // ------------------------------------------------------------------
+    match /roles/{rolId} {
+      allow read: if member() && puede('users.manage') && mine(resource);
+      allow create: if member() && puede('users.manage') && staysMine();
+      allow update: if member() && puede('users.manage') && mine(resource) && staysMine();
+      allow delete: if member() && puede('users.manage') && mine(resource);
+    }
+
+    // ------------------------------------------------------------------
+    // invitaciones
+    //
+    // Cómo entra alguien nuevo. El dueño no puede crear la cuenta de otro desde
+    // el navegador (createUserWithEmailAndPassword lo sacaría de la suya), así
+    // que deja una invitación y la persona se registra sola. De rebote, el
+    // empleado elige su propia contraseña y el dueño nunca la sabe.
+    // ------------------------------------------------------------------
+    match /invitaciones/{invitacionId} {
+      // La lee quien gestiona el equipo, y también su destinatario: sin esa
+      // segunda lectura, la invitación no le serviría de nada a quien se está
+      // registrando, que todavía no pertenece a ningún negocio.
+      allow read: if signedIn()
+                  && ((member() && puede('users.manage') && mine(resource))
+                      || resource.data.email == miCorreo());
+
+      allow create: if member() && puede('users.manage') && staysMine()
+                    && request.resource.data.estado == 'pendiente';
+
+      // Marcarla usada solo puede hacerlo su destinatario, y solo en ese
+      // sentido: nadie puede reabrir una invitación ya gastada para colar a
+      // otra persona con los mismos permisos.
+      allow update: if signedIn()
+                    && resource.data.email == miCorreo()
+                    && resource.data.estado == 'pendiente'
+                    && request.resource.data.estado == 'aceptada'
+                    && request.resource.data.aceptadaPor == request.auth.uid
+                    && notChanging(['negocioId', 'email', 'rolId', 'permisos']);
+
+      // Retirar una invitación que aún no se usó sí se borra: no hay historial
+      // que preservar, y dejarla ahí sería dejar una puerta abierta.
+      allow delete: if member() && puede('users.manage') && mine(resource);
+    }
+
+    // ------------------------------------------------------------------
+    // cuentas por cobrar · abonos  (el fiado)
+    //
+    // Una venta fiada es una venta completa: descuenta inventario, cuenta para
+    // el reporte del día y numera su documento. Lo único distinto es que el
+    // dinero no entró, y en vez de un movimiento de caja crea una deuda.
+    //
+    // El saldo se lleva en dos sitios a la vez —resumido en el cliente y
+    // detallado aquí—, escritos en el mismo lote. Ver lib/customers.ts.
+    // ------------------------------------------------------------------
+    match /cuentas_cobrar/{deudaId} {
+      allow read: if member() && puede('customers.view') && mine(resource);
+
+      allow create: if member() && puede('sales.credit') && staysMine()
+                    && request.resource.data.abonadoUsd == 0
+                    && request.resource.data.saldoUsd == request.resource.data.montoUsd
+                    && request.resource.data.montoUsd > 0;
+
+      // Lo único que se mueve es lo abonado. El importe original, el cliente y
+      // la venta que la originó quedan como se registraron: una deuda cuyo
+      // monto se puede editar después no prueba nada.
+      allow update: if member() && puede('receivables.collect')
+                    && mine(resource) && staysMine()
+                    && notChanging(['clienteId', 'montoUsd', 'ventaId', 'fecha', 'creadoPor'])
+                    && request.resource.data.abonadoUsd >= resource.data.abonadoUsd
+                    && request.resource.data.abonadoUsd <= resource.data.montoUsd
+                    && request.resource.data.saldoUsd >= 0;
+
+      allow delete: if false;
+    }
+
+    match /abonos/{abonoId} {
+      allow read: if member() && puede('customers.view') && mine(resource);
+
+      allow create: if member() && puede('receivables.collect') && staysMine()
+                    && request.resource.data.registradoPor == request.auth.uid
+                    && request.resource.data.montoUsd > 0;
+
+      // Un abono no se retoca. Si se registró mal, se corrige con otro y quedan
+      // los dos: es un recibo, y un recibo que se puede cambiar no es un recibo.
       allow update, delete: if false;
     }
 

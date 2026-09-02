@@ -11,17 +11,21 @@ import { ThemeToggle } from "@/components/theme-toggle"
 import Sidebar from "./sidebar"
 import BottomNav from "./bottom-nav"
 import RateWidget from "./rate-widget"
+import HomeView from "./home-view"
 import ProductsView from "./products-view"
 import SalesView from "./sales-view"
+import CustomersView from "./customers-view"
+import SummaryView from "./summary-view"
 import StatisticsView from "./statistics-view"
 import ReportsView from "./reports-view"
 import CalculatorView from "./CalculatorView"
 import CashView from "./cash-view"
 import AccountsView from "./accounts-view"
 import ExpensesView from "./expenses-view"
+import TeamView from "./team-view"
 import TrialExpirationModal from "./trial-expiration-modal"
 import SyncBanner from "@/components/sync-banner"
-import { DEFAULT_VIEW, navItemsFor } from "./navigation"
+import { DEFAULT_VIEW, navGroupsFor, navItemsFor, navSplitMovil } from "./navigation"
 import { ROLE_LABELS } from "@/lib/roles"
 import { viewTransition } from "@/lib/motion"
 
@@ -38,7 +42,7 @@ function remainingTrialDays(trialEndsAt: unknown): number | null {
 }
 
 export default function Dashboard() {
-  const { user, logout, isTrialExpired, role } = useAuth()
+  const { user, logout, isTrialExpired, role, rolNombre, permisos } = useAuth()
   const [businessName, setBusinessName] = useState("Mi Comercio")
   const [activeView, setActiveView] = useState(DEFAULT_VIEW)
   const [userPlan, setUserPlan] = useState("")
@@ -80,23 +84,33 @@ export default function Dashboard() {
     )
   }
 
-  const navItems = navItemsFor(role)
+  // El menú se arma con la lista de permisos, no con el rol: desde que los roles
+  // los crea el dueño, el rol solo dice si esta persona es el dueño.
+  const navItems = navItemsFor(permisos)
+  const grupos = navGroupsFor(permisos)
+  const { fijos, extra } = navSplitMovil(permisos)
   const activeItem = navItems.find((item) => item.id === activeView)
   const showTrialBanner = userPlan === "trial" && remainingDays !== null
 
-  // Si el rol no alcanza para el módulo abierto (por ejemplo, tras un cambio de
-  // permisos), se cae al primero disponible en vez de dejar el panel vacío.
+  // Si los permisos no alcanzan para el módulo abierto (por ejemplo, porque el
+  // dueño acaba de recortar el rol), se cae al primero disponible en vez de
+  // dejar el panel en blanco.
   const resolvedView = activeItem ? activeView : (navItems[0]?.id ?? DEFAULT_VIEW)
+
+  // El dueño se anuncia siempre como "Dueño"; los demás, con el nombre que su
+  // rol tenga puesto, que es el que van a reconocer.
+  const etiquetaRol =
+    role === "owner" ? ROLE_LABELS.owner : rolNombre || (role ? ROLE_LABELS[role] : null)
 
   return (
     <div className="bg-background min-h-screen">
       <Sidebar
-        items={navItems}
+        grupos={grupos}
         activeView={resolvedView}
         setActiveView={setActiveView}
         businessName={businessName}
         userEmail={user?.email}
-        roleLabel={role ? ROLE_LABELS[role] : null}
+        roleLabel={etiquetaRol}
         onLogout={logout}
       />
 
@@ -109,7 +123,9 @@ export default function Dashboard() {
               {/* En móvil, el nombre del módulo activo hace de migas de pan;
                   en escritorio ya lo dice la barra lateral. */}
               <p className="text-muted-foreground truncate text-xs lg:hidden">{activeItem?.label}</p>
-              <p className="text-muted-foreground hidden truncate text-xs lg:block">{user?.email}</p>
+              <p className="text-muted-foreground hidden truncate text-xs lg:block">
+                {user?.email}
+              </p>
             </div>
 
             <div className="flex shrink-0 items-center gap-1 sm:gap-2">
@@ -149,7 +165,7 @@ export default function Dashboard() {
         </header>
 
         {/* pb-nav deja hueco para la barra inferior del móvil. */}
-        <main className="flex-1 px-4 py-4 pb-nav sm:px-6 sm:py-6 lg:pb-6">
+        <main className="pb-nav flex-1 px-4 py-4 sm:px-6 sm:py-6 lg:pb-6">
           {/* La tasa, que en pantallas pequeñas no cabe en la cabecera. */}
           <RateWidget compact className="mb-4 sm:hidden" />
 
@@ -166,20 +182,29 @@ export default function Dashboard() {
               animate="visible"
               exit="exit"
             >
+              {resolvedView === "home" && <HomeView irA={setActiveView} />}
               {resolvedView === "sales" && <SalesView />}
               {resolvedView === "cash" && <CashView />}
+              {resolvedView === "clientes" && <CustomersView />}
               {resolvedView === "cuentas" && <AccountsView />}
               {resolvedView === "gastos" && <ExpensesView />}
               {resolvedView === "products" && <ProductsView />}
+              {resolvedView === "resumen" && <SummaryView />}
               {resolvedView === "statistics" && <StatisticsView />}
               {resolvedView === "reports" && <ReportsView />}
+              {resolvedView === "equipo" && <TeamView />}
               {resolvedView === "calculator" && <CalculatorView />}
             </m.div>
           </AnimatePresence>
         </main>
       </div>
 
-      <BottomNav items={navItems} activeView={resolvedView} setActiveView={setActiveView} />
+      <BottomNav
+        fijos={fijos}
+        extra={extra}
+        activeView={resolvedView}
+        setActiveView={setActiveView}
+      />
     </div>
   )
 }

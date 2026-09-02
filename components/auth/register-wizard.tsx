@@ -5,6 +5,7 @@ import Link from "next/link"
 import { AnimatePresence, m } from "framer-motion"
 import { createUserWithEmailAndPassword, sendEmailVerification } from "firebase/auth"
 import { doc, setDoc } from "firebase/firestore"
+import { buscarInvitacion, marcarInvitacionAceptada } from "@/lib/team"
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3"
 import { AlertCircle, ArrowLeft, ArrowRight, Check, Eye, EyeOff, Loader2, MailCheck } from "lucide-react"
 import { auth, db } from "@/lib/firebase"
@@ -57,6 +58,8 @@ export default function RegisterWizard({ onGoToLogin }: RegisterWizardProps) {
 
   // Paso 2
   const [businessName, setBusinessName] = useState("")
+  /** Si venía invitado, a qué negocio entró y con qué rol. Se enseña al final. */
+  const [seUnioA, setSeUnioA] = useState<{ negocio: string; rol: string } | null>(null)
   const [rubro, setRubro] = useState(RUBROS[0])
   const [prefijo, setPrefijo] = useState(PREFIJOS[0])
   const [telefono, setTelefono] = useState("")
@@ -111,21 +114,53 @@ export default function RegisterWizard({ onGoToLogin }: RegisterWizardProps) {
       const credenciales = await createUserWithEmailAndPassword(auth, email.trim(), password)
       await sendEmailVerification(credenciales.user)
 
-      // Quien se registra abre su propio negocio y es su dueño. El plan SIEMPRE
-      // arranca en prueba: las reglas de Firestore rechazan cualquier otra cosa.
-      await setDoc(doc(db, "usuarios", credenciales.user.uid), {
+      // La invitación se busca AQUÍ y no antes porque las reglas solo dejan
+      // leerla a quien ya inició sesión con ese correo. Antes de crear la
+      // cuenta, cualquiera podría listar a quién han invitado.
+      const invitacion = await buscarInvitacion(email.trim())
+
+      const comun = {
         email: email.trim(),
-        businessName: businessName.trim(),
-        rubro,
         telefono: telefono.trim() ? `${prefijo}${telefono.replace(/\D/g, "")}` : null,
-        negocioId: credenciales.user.uid,
-        role: "owner",
-        plan: "trial",
         isActive: true,
         emailVerified: false,
-        trialEndsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        plan: "trial" as const,
         createdAt: new Date(),
-      })
+      }
+
+      if (invitacion) {
+        // Se une al negocio que lo invitó, con los permisos que le pusieron.
+        // El negocio, el rol y los permisos tienen que calcar la invitación:
+        // las reglas lo comprueban documento contra documento.
+        await setDoc(doc(db, "usuarios", credenciales.user.uid), {
+          ...comun,
+          businessName: invitacion.negocioNombre,
+          negocioId: invitacion.negocioId,
+          role: "staff",
+          rolId: invitacion.rolId,
+          rolNombre: invitacion.rolNombre,
+          permisos: invitacion.permisos,
+          invitacionId: invitacion.id,
+        })
+
+        // Se marca usada después del alta, no antes: si el alta fallara, la
+        // invitación quedaría gastada y la persona no podría volver a intentarlo.
+        await marcarInvitacionAceptada(invitacion.id, credenciales.user.uid)
+
+        setSeUnioA({ negocio: invitacion.negocioNombre, rol: invitacion.rolNombre })
+      } else {
+        // Quien se registra sin invitación abre su propio negocio y es su dueño.
+        // El plan SIEMPRE arranca en prueba: las reglas rechazan cualquier otra
+        // cosa, porque ahí estaba el agujero de regalarse el plan completo.
+        await setDoc(doc(db, "usuarios", credenciales.user.uid), {
+          ...comun,
+          businessName: businessName.trim(),
+          rubro,
+          negocioId: credenciales.user.uid,
+          role: "owner",
+          trialEndsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        })
+      }
 
       // Se cierra la sesión para obligar a verificar el correo antes de entrar.
       await auth.signOut()
@@ -269,7 +304,9 @@ export default function RegisterWizard({ onGoToLogin }: RegisterWizardProps) {
                   autoFocus
                 />
                 <p className="text-muted-foreground text-xs">
-                  Es el que saldrá en tus recibos y notas de entrega.
+                  Es el que saldrá en tus recibos y notas de entrega. Si te invitaron a un negocio
+                  que ya existe, pon lo que quieras: al crear la cuenta te uniremos a ese negocio y
+                  este nombre se descarta.
                 </p>
               </div>
 
@@ -377,6 +414,16 @@ export default function RegisterWizard({ onGoToLogin }: RegisterWizardProps) {
               Te enviamos un mensaje a <strong className="text-foreground">{email}</strong> para
               verificar la cuenta. Ábrelo y pulsa el enlace.
             </p>
+
+            {/* Quien llegó invitado tiene que enterarse de a qué negocio entró y
+                con qué rol: si no, la primera vez que abra el sistema no va a
+                entender por qué le faltan pantallas. */}
+            {seUnioA ? (
+              <p className="bg-primary/10 text-primary mt-4 rounded-lg px-4 py-3 text-sm">
+                Te uniste a <strong>{seUnioA.negocio}</strong> como{" "}
+                <strong>{seUnioA.rol}</strong>. Al verificar el correo entrarás directo ahí.
+              </p>
+            ) : null}
 
             <div className="bg-muted/50 mt-6 rounded-lg p-4 text-left text-sm">
               <p className="font-medium">¿No te llegó?</p>
