@@ -1,7 +1,8 @@
 "use client"
 
 import type React from "react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useGoogleReCaptcha } from "react-google-recaptcha-v3"
 // ✅ Importar la función para restablecer contraseña
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification, sendPasswordResetEmail } from "firebase/auth"
@@ -18,7 +19,14 @@ import { Label } from "@/components/ui/label"
 
 
 export default function LoginForm() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
   const [isLogin, setIsLogin] = useState(true)
+
+  // La portada enlaza a /entrar?registro=1 para abrir directamente el alta.
+  useEffect(() => {
+    if (searchParams.get("registro")) setIsLogin(false)
+  }, [searchParams])
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [businessName, setBusinessName] = useState("")
@@ -88,6 +96,8 @@ export default function LoginForm() {
         return 
       }
       
+      let accesoConcedido = true
+
       // 3. VERIFICACIÓN DE EXPIRACIÓN DE PRUEBA (TRIAL)
       const userDoc = await getDoc(doc(db, "usuarios", user.uid))
       if (userDoc.exists()) {
@@ -103,12 +113,13 @@ export default function LoginForm() {
             alert("¡CUENTA DESACTIVADA! Su período de prueba ha finalizado. Para seguir gozando del servicio, contacte al administrador para comprar la versión completa.");
 
             setError("Su período de prueba ha finalizado. La cuenta ha sido desactivada. Por favor, contacte al administrador.");
-            
+            accesoConcedido = false
             return 
           }
         }
       }
-      
+
+      if (accesoConcedido) router.replace("/panel")
     } catch (err: any) {
       if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
         setError("Credenciales incorrectas. Verifica tu correo y contraseña.")
