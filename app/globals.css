@@ -3,79 +3,125 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+  SISTEMA DE COLOR
+  ----------------
+  Los colores de interfaz salen del logo de Siskoven: azul marino y turquesa.
+  Antes la paleta era morada, que no tenía relación con la marca.
+
+  Los colores de los gráficos (--chart-*) son una paleta categórica validada
+  para daltonismo, comprobada contra las dos superficies reales de la app
+  (blanco y #151a24), en orden fijo. No se reordenan ni se inventan colores
+  nuevos para una sexta serie: a partir de ahí se agrupa en "Otros".
+*/
+
 :root {
-  --background: oklch(0.98 0.001 250);
-  --foreground: oklch(0.15 0.04 250);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.15 0.04 250);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.55 0.24 280);
-  --primary-foreground: oklch(1 0 0);
-  --secondary: oklch(0.95 0.01 250);
-  --secondary-foreground: oklch(0.15 0.04 250);
-  --muted: oklch(0.92 0.01 250);
-  --muted-foreground: oklch(0.5 0.02 250);
-  --accent: oklch(0.65 0.2 40);
-  --accent-foreground: oklch(1 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(1 0 0);
-  --border: oklch(0.92 0.01 250);
-  --input: oklch(0.96 0.01 250);
-  --ring: oklch(0.55 0.24 280);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  /* Planos y texto */
+  --background: #f6f8fb;
+  --foreground: #101828;
+  --card: #ffffff;
+  --card-foreground: #101828;
+  --popover: #ffffff;
+  --popover-foreground: #101828;
+
+  /* Marca */
+  --primary: #1e3a73;
+  --primary-foreground: #ffffff;
+  --secondary: #eef2f8;
+  --secondary-foreground: #1e3a73;
+  --accent: #e2f6fa;
+  --accent-foreground: #07485a;
+  --brand-cyan: #17a9c7;
+
+  --muted: #f2f4f7;
+  --muted-foreground: #667085;
+  --border: #e4e7ec;
+  --input: #ffffff;
+  --ring: #1e3a73;
+
+  /* Estados. Nunca se usan como color de serie, y siempre van acompañados de
+     icono o etiqueta: el color por sí solo no comunica el estado. */
+  --success: #0ca30c;
+  --success-foreground: #ffffff;
+  --warning: #fab219;
+  --warning-foreground: #3d2a00;
+  --destructive: #d03b3b;
+  --destructive-foreground: #ffffff;
+
+  /* Series de datos (orden fijo) */
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-5: #e87ba4;
+
+  /* Cromo de los gráficos */
+  --chart-grid: #e4e7ec;
+  --chart-axis: #98a2b3;
+
+  --radius: 0.75rem;
+
+  --sidebar: #ffffff;
+  --sidebar-foreground: #101828;
+  --sidebar-primary: #1e3a73;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eef2f8;
+  --sidebar-accent-foreground: #1e3a73;
+  --sidebar-border: #e4e7ec;
+  --sidebar-ring: #1e3a73;
 }
 
 .dark {
-  --background: oklch(0.12 0.02 250);
-  --foreground: oklch(0.95 0.01 250);
-  --card: oklch(0.18 0.03 250);
-  --card-foreground: oklch(0.95 0.01 250);
-  --popover: oklch(0.145 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.7 0.2 280);
-  --primary-foreground: oklch(0.12 0.02 250);
-  --secondary: oklch(0.25 0.02 250);
-  --secondary-foreground: oklch(0.95 0.01 250);
-  --muted: oklch(0.3 0.02 250);
-  --muted-foreground: oklch(0.7 0.02 250);
-  --accent: oklch(0.75 0.18 40);
-  --accent-foreground: oklch(0.12 0.02 250);
-  --destructive: oklch(0.6 0.2 25);
-  --destructive-foreground: oklch(0.95 0.01 250);
-  --border: oklch(0.25 0.02 250);
-  --input: oklch(0.22 0.02 250);
-  --ring: oklch(0.7 0.2 280);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(0.269 0 0);
-  --sidebar-ring: oklch(0.439 0 0);
+  --background: #0c1017;
+  --foreground: #f2f4f7;
+  --card: #151a24;
+  --card-foreground: #f2f4f7;
+  --popover: #151a24;
+  --popover-foreground: #f2f4f7;
+
+  --primary: #4b8df8;
+  --primary-foreground: #0c1017;
+  --secondary: #1c2432;
+  --secondary-foreground: #e4e7ec;
+  --accent: #10313c;
+  --accent-foreground: #7fe0f2;
+  --brand-cyan: #35c6dc;
+
+  --muted: #1c2432;
+  --muted-foreground: #98a2b3;
+  --border: #232b3a;
+  --input: #1c2432;
+  --ring: #4b8df8;
+
+  --success: #0ca30c;
+  --success-foreground: #042404;
+  --warning: #fab219;
+  --warning-foreground: #3d2a00;
+  --destructive: #e26363;
+  --destructive-foreground: #2a0808;
+
+  /* Los mismos tonos, escalonados para la superficie oscura. No es un giro
+     automático del modo claro: son pasos elegidos y validados aparte. */
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
+  --chart-5: #d55181;
+
+  --chart-grid: #232b3a;
+  --chart-axis: #667085;
+
+  --sidebar: #151a24;
+  --sidebar-foreground: #f2f4f7;
+  --sidebar-primary: #4b8df8;
+  --sidebar-primary-foreground: #0c1017;
+  --sidebar-accent: #1c2432;
+  --sidebar-accent-foreground: #f2f4f7;
+  --sidebar-border: #232b3a;
+  --sidebar-ring: #4b8df8;
 }
 
 @theme inline {
-  /* optional: --font-sans, --font-serif, --font-mono if they are applied in the layout.tsx */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -90,6 +136,11 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-brand-cyan: var(--brand-cyan);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
@@ -118,7 +169,112 @@
   * {
     @apply border-border outline-ring/50;
   }
+
   body {
     @apply bg-background text-foreground;
+    /* Ninguna vista debe provocar desplazamiento lateral en el teléfono. */
+    overflow-x: hidden;
+  }
+
+  /* Las cifras de dinero se alinean en columna: sin esto cada fila de una tabla
+     de precios baila unos píxeles y cuesta compararlas de un vistazo. */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* El distintivo de reCAPTCHA se ancla abajo a la derecha y tapaba la barra de
+   navegación en el teléfono. Se sube por encima de ella; no se oculta, porque
+   Google exige mostrarlo o incluir su texto de atribución. */
+.grecaptcha-badge {
+  z-index: 30 !important;
+}
+
+@media (max-width: 1023px) {
+  .grecaptcha-badge {
+    bottom: calc(5rem + env(safe-area-inset-bottom, 0px)) !important;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   UTILIDADES DE LA PÁGINA DE PRESENTACIÓN
+
+   La aplicación es clara y sobria porque se usa ocho horas al día. La portada
+   es lo contrario: se ve treinta segundos y tiene que impresionar, así que va
+   en oscuro con los degradados de la marca. Son dos registros a propósito.
+   --------------------------------------------------------------------------- */
+
+.landing {
+  /* Azul marino profundo del logo, oscurecido para que el turquesa brille. */
+  --landing-ink: #070c18;
+  --landing-navy: #1e3a73;
+  --landing-cyan: #17a9c7;
+  --landing-aqua: #35c6dc;
+  --landing-sky: #4b8df8;
+
+  background: var(--landing-ink);
+  color: #f2f4f7;
+}
+
+/* Titular con degradado: del blanco al turquesa del logo. */
+.text-gradient-brand {
+  background-image: linear-gradient(120deg, var(--landing-aqua) 0%, var(--landing-sky) 55%, #a5b4fc 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.text-gradient-soft {
+  background-image: linear-gradient(120deg, #ffffff 0%, #cbd5e1 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.bg-gradient-brand {
+  background-image: linear-gradient(135deg, var(--landing-navy) 0%, var(--landing-cyan) 100%);
+}
+
+.shadow-glow {
+  box-shadow: 0 20px 60px -20px rgba(23, 169, 199, 0.45);
+}
+
+/* Retícula de fondo del héroe. Se desvanece hacia abajo para no competir con
+   el texto. */
+.hero-grid {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: linear-gradient(to bottom, black, transparent 75%);
+  -webkit-mask-image: linear-gradient(to bottom, black, transparent 75%);
+}
+
+/* Cinta de logotipos en movimiento continuo. */
+@keyframes landing-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+.animate-marquee {
+  animation: landing-marquee 40s linear infinite;
+}
+
+/* Quien pidió menos movimiento no ve la cinta desplazarse. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-marquee {
+    animation: none;
+  }
+}
+
+@layer utilities {
+  /* Respeta la barra de gestos del iPhone bajo la navegación inferior. */
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* Espacio para que la navegación inferior no tape el final del contenido. */
+  .pb-nav {
+    padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
   }
 }

@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { DollarSign, Euro, Loader2, Repeat2, Calculator as CalcIcon } from "lucide-react";
 // Importar el servicio BCV para obtener las tasas (Asumiendo que existe en la ruta lib)
-import { fetchBCVRateFromAPI } from "@/lib/bcv-service"; 
+import { useRates } from "@/hooks/use-rates";
 
 
 // --- Tipado para las tasas de cambio ---
@@ -187,39 +187,16 @@ const CurrencyConverter: React.FC<{ rates: ExchangeRates }> = ({ rates }) => {
 // --- Componente principal (Vista de Calculadora) ---
 
 const CalculatorView: React.FC = () => {
-    const [rates, setRates] = useState<ExchangeRates>({
-        usdRate: null,
-        eurRate: null,
-        loading: true,
-        error: null
-    });
+    // El conversor pedía una tasa de euro que la API vieja nunca devolvía, así
+    // que la conversión a euros estaba muerta. DolarAPI Venezuela sí la publica.
+    const { rates: apiRates, loading, error } = useRates();
 
-    useEffect(() => {
-        const loadRates = async () => {
-            try {
-                setRates(r => ({ ...r, loading: true, error: null }));
-
-                // 🚨 Asumiendo que esta función trae ambas tasas (USD y EUR) del BCV
-                const data = await fetchBCVRateFromAPI();
-
-                // Intentamos extraer USD y EUR. Si solo viene 'rate', lo asignamos a USD.
-                const currentUsdRate = (data as any).usdRate ?? (data as any).rate ?? null;
-                const currentEurRate = (data as any).eurRate ?? null;
-
-                setRates({
-                    usdRate: currentUsdRate !== null ? parseFloat(currentUsdRate) : null,
-                    eurRate: currentEurRate !== null ? parseFloat(currentEurRate) : null,
-                    loading: false,
-                    error: null,
-                });
-
-            } catch (err) {
-                console.error("Error al cargar tasas de BCV:", err);
-                setRates(r => ({ ...r, loading: false, error: "No se pudieron cargar las tasas de cambio BCV." }));
-            }
-        };
-        loadRates();
-    }, []);
+    const rates: ExchangeRates = {
+        usdRate: apiRates?.usd.oficial?.rate ?? null,
+        eurRate: apiRates?.eur.oficial?.rate ?? null,
+        loading,
+        error: error ? "No se pudieron cargar las tasas de cambio." : null,
+    };
 
     return (
         <div className="p-4 sm:p-6 lg:p-8">

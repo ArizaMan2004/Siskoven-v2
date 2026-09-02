@@ -1,23 +1,13 @@
-"use client"
+import LandingPage from "@/components/landing/landing-page"
 
-import { useAuth } from "@/lib/auth-context"
-import LoginForm from "@/components/auth/login-form"
-import Dashboard from "@/components/dashboard/dashboard"
-
+/**
+ * Portada pública.
+ *
+ * Antes esta ruta mostraba directamente el formulario de acceso, así que quien
+ * llegaba desde fuera se topaba con un campo de contraseña sin saber siquiera
+ * qué era Siskoven. Ahora `/` explica el producto, `/entrar` es el acceso y
+ * `/panel` la aplicación.
+ */
 export default function Home() {
-  const { user, loading } = useAuth()
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-background">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-muted-foreground">Cargando...</p>
-        </div>
-      </div>
-    )
-  }
-
-  // ✅ Ya no necesitamos RecaptchaProviderWrapper aquí.
-  return user ? <Dashboard /> : <LoginForm />
+  return <LandingPage />
 }

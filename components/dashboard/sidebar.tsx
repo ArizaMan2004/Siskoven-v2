@@ -1,83 +1,143 @@
 "use client"
 
+import Image from "next/image"
+import { m } from "framer-motion"
+import { LogOut, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
-// 🟢 Se añade 'Calculator' a las importaciones de íconos
-import { Package, ShoppingCart, BarChart3, TrendingUp, Calculator } from "lucide-react" 
 import { ThemeToggle } from "@/components/theme-toggle"
+import type { GrupoId, NavItem } from "./navigation"
+import { springSoft } from "@/lib/motion"
+import { useSuperAdmin } from "@/hooks/use-super-admin"
+import { cn } from "@/lib/utils"
 
 interface SidebarProps {
+  /** Módulos ya filtrados y agrupados por sección. */
+  grupos: Array<{ id: GrupoId; label: string; items: NavItem[] }>
   activeView: string
   setActiveView: (view: string) => void
-  isMobileOpen: boolean
-  setIsMobileOpen: (isOpen: boolean) => void
-  isDesktopOpen: boolean
-  setIsDesktopOpen: (isOpen: boolean) => void
+  businessName: string
+  userEmail?: string | null
+  /** Cómo se llama su rol. Quien usa la caja debe saber con qué permisos entró. */
+  roleLabel?: string | null
+  onLogout: () => void
 }
 
+/**
+ * Barra lateral de escritorio (a partir de 1024px). En pantallas menores no se
+ * renderiza: ahí manda la barra inferior, que se maneja con el pulgar.
+ *
+ * Va en secciones porque doce entradas seguidas se leen como una lista de la
+ * compra. Agrupadas ("día a día", "tu negocio", "cómo va") se recuerda dónde
+ * está cada cosa sin tener que leerlas todas cada vez.
+ */
 export default function Sidebar({
+  grupos,
   activeView,
   setActiveView,
-  isMobileOpen,
-  setIsMobileOpen,
-  isDesktopOpen,
-  setIsDesktopOpen,
+  businessName,
+  userEmail,
+  roleLabel,
+  onLogout,
 }: SidebarProps) {
-  
-  // 🟢 Se agrega el nuevo ítem de Calculadora
-  const menuItems = [
-    { id: "products", label: "Productos", icon: Package },
-    { id: "sales", label: "Punto de Venta", icon: ShoppingCart },
-    { id: "statistics", label: "Estadísticas", icon: TrendingUp },
-    { id: "reports", label: "Reportes", icon: BarChart3 },
-    { id: "calculator", label: "Calculadora", icon: Calculator }, // CLAVE: El ID "calculator" activa el componente en dashboard.tsx
-  ]
-
-  const sidebarClasses = `
-    w-64 bg-card border-r border-border shadow-sm z-50 transition-transform duration-300
-    
-    fixed inset-y-0 left-0 h-full transform 
-    ${isMobileOpen ? "translate-x-0" : "-translate-x-full"}
-    
-    lg:fixed lg:inset-y-0 lg:left-0 lg:h-full lg:w-64 lg:transform lg:transition-transform lg:duration-300
-    ${isDesktopOpen ? "lg:translate-x-0" : "lg:-translate-x-full"}
-  `
+  const { isSuperAdmin } = useSuperAdmin()
 
   return (
-    <aside className={sidebarClasses}>
-      <div className="p-6 flex flex-col h-full">
-        {/* Header con logo */}
-        <div className="flex items-center gap-2 mb-8">
-          <div className="w-10 h-10 flex items-center justify-center">
-            <img src="/logo.png" alt="logo Siskoven" className="w-full h-full object-contain" />
+    <aside className="bg-sidebar border-sidebar-border fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r lg:flex">
+      <div className="flex items-center gap-2.5 px-5 py-5">
+        <Image
+          src="/logo.png"
+          alt=""
+          width={36}
+          height={36}
+          className="size-9 object-contain"
+          aria-hidden
+        />
+        <span className="text-primary text-lg font-bold tracking-tight">Siskoven</span>
+      </div>
+
+      {/* La lista puede pasar del alto de la pantalla en un portátil pequeño con
+          todos los módulos visibles, así que se desplaza sola. */}
+      <nav aria-label="Navegación principal" className="flex-1 overflow-y-auto px-3 pb-2">
+        {grupos.map((grupo) => (
+          <div key={grupo.id} className="mb-4 last:mb-0">
+            <p className="text-muted-foreground/70 px-3 pb-1.5 text-[11px] font-semibold tracking-wider uppercase">
+              {grupo.label}
+            </p>
+
+            <ul className="space-y-0.5">
+              {grupo.items.map((item) => {
+                const Icon = item.icon
+                const isActive = activeView === item.id
+
+                return (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      onClick={() => setActiveView(item.id)}
+                      aria-current={isActive ? "page" : undefined}
+                      className={cn(
+                        "relative flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                        isActive
+                          ? "text-sidebar-accent-foreground"
+                          : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
+                      )}
+                    >
+                      {isActive ? (
+                        <m.span
+                          layoutId="sidebar-active"
+                          transition={springSoft}
+                          className="bg-sidebar-accent absolute inset-0 rounded-lg"
+                        />
+                      ) : null}
+                      <Icon className="relative size-4 shrink-0" aria-hidden />
+                      <span className="relative truncate">{item.label}</span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
           </div>
-          <span className="text-xl font-bold text-primary">Siskoven</span>
+        ))}
+      </nav>
+
+      {/* Panel del SaaS. Solo aparece para quien administra Siskoven; no es un
+          rol del negocio sino una lista aparte en Firestore. */}
+      {isSuperAdmin && (
+        <div className="px-3 pb-2">
+          <a
+            href="/admin"
+            className="text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors"
+          >
+            <ShieldCheck className="size-4 shrink-0" aria-hidden />
+            Administración
+          </a>
         </div>
+      )}
 
-        {/* Navegación */}
-        <nav className="space-y-2 flex-1">
-          {menuItems.map((item) => {
-            const Icon = item.icon
-            return (
-              <Button
-                key={item.id}
-                onClick={() => {
-                  setActiveView(item.id)
-                  setIsMobileOpen(false)
-                }}
-                variant={activeView === item.id ? "default" : "ghost"}
-                className="w-full justify-start gap-2"
-              >
-                <Icon className="w-4 h-4" />
-                {item.label}
-              </Button>
-            )
-          })}
-        </nav>
-
-        <div className="pt-6 border-t border-border flex items-center justify-between">
-          <span className="text-sm text-muted-foreground">Tema</span>
+      <div className="border-sidebar-border space-y-3 border-t p-3">
+        <div className="flex items-center justify-between gap-2 px-2">
+          <span className="text-muted-foreground text-sm">Tema</span>
           <ThemeToggle />
         </div>
+
+        <div className="min-w-0 px-2">
+          <p className="truncate text-sm font-medium">{businessName}</p>
+          {userEmail ? <p className="text-muted-foreground truncate text-xs">{userEmail}</p> : null}
+          {roleLabel ? (
+            <span className="bg-secondary text-secondary-foreground mt-1.5 inline-block max-w-full truncate rounded-full px-2 py-0.5 text-[11px] font-medium">
+              {roleLabel}
+            </span>
+          ) : null}
+        </div>
+
+        <Button
+          variant="ghost"
+          onClick={onLogout}
+          className="text-muted-foreground w-full justify-start gap-2"
+        >
+          <LogOut className="size-4" aria-hidden />
+          Cerrar sesión
+        </Button>
       </div>
     </aside>
   )

@@ -1,31 +1,18 @@
-import withPWA from 'next-pwa';
-
-// Definimos la función de envoltura PWA con la configuración deseada
-// Esta función (pwaConfig) es el resultado de llamar a withPWA con tus opciones.
-const pwaConfig = withPWA({
-  dest: 'public',
-  register: true,
-  skipWaiting: true,
-  
-  // FIX 1: Usamos la opción 'disable' del plugin next-pwa, lo cual 
-  // es la forma correcta de manejar PWA solo en producción.
-  disable: process.env.NODE_ENV === 'development',
-});
-
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Configuración de Next.js
+  // Los errores de tipos rompen el build a propósito: estaban ocultando bugs
+  // reales, entre ellos un className duplicado y varios precios mal tipados.
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false,
   },
   images: {
     unoptimized: true,
   },
-  
-  // FIX 2: Añadimos 'turbopack: {}' para evitar el conflicto entre
-  // Turbopack (nuevo constructor de Next.js) y Webpack (usado por el plugin PWA).
-  turbopack: {}, 
-};
+}
 
-// Exportamos la configuración base envuelta en la configuración de PWA
-export default pwaConfig(nextConfig);
+// Nota: aquí vivía `next-pwa`. Se quitó porque es la versión para Next 12/13,
+// solo funciona con webpack y bajo Turbopack no generaba ningún service
+// worker: había manifiesto pero cero capacidad sin conexión. El service worker
+// ahora está escrito a mano en public/sw.js y se registra desde
+// components/service-worker-registrar.tsx.
+export default nextConfig

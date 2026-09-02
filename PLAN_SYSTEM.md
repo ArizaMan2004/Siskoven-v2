@@ -1,8 +1,8 @@
-# Sistema de Planes Venko
+# Sistema de Planes Siskoven
 
 ## Descripción General
 
-Venko ofrece dos opciones de planes para los usuarios:
+Siskoven ofrece dos opciones de planes para los usuarios:
 
 ### 1. Prueba Gratuita (7 días)
 - **Duración**: 7 días desde la creación de la cuenta

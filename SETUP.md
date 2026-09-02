@@ -1,4 +1,4 @@
-# Guía Completa de Instalación - Venko
+# Guía Completa de Instalación - Siskoven
 
 ## Paso 1: Descargar el Proyecto
 
@@ -20,7 +20,7 @@ Esto instalará todas las librerías necesarias (Next.js, React, Firebase, jsPDF
 
 1. Ve a [Firebase Console](https://console.firebase.google.com)
 2. Haz clic en "Crear proyecto"
-3. Ingresa el nombre: "Venko"
+3. Ingresa el nombre: "Siskoven"
 4. Acepta los términos y crea el proyecto
 
 ### 3.2 Habilitar Autenticación
@@ -202,4 +202,4 @@ Si tienes problemas, verifica:
 - Las reglas de seguridad están configuradas
 - El servidor está ejecutándose en `localhost:3000`
 
-¡Disfruta usando Venko!
+¡Disfruta usando Siskoven!

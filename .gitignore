@@ -18,6 +18,11 @@ yarn-error.log*
 
 # env files
 .env*
+# Excepción: los valores NEXT_PUBLIC_* se compilan dentro del JavaScript que se
+# envía al navegador, así que no son secretos y sí conviene tenerlos versionados
+# para que el despliegue no dependa de configurar nada a mano.
+!.env.production
+!.env.example
 
 # vercel
 .vercel
@@ -25,3 +30,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+# El ejemplo sí se versiona: documenta qué variables hacen falta.
+!.env.example
+
+# Logs del emulador de Firebase
+firestore-debug.log
+firebase-debug.log
+ui-debug.log
+.firebase/

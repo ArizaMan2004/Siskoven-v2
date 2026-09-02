@@ -1,6 +1,6 @@
-# Venko - Sistema de Gestión de Inventario
+# Siskoven - Sistema de Gestión de Inventario
 
-Venko es un sistema profesional de gestión de inventario diseñado para negocios en Venezuela, con integración de tasa BCV y gestión de ventas en tiempo real.
+Siskoven es un sistema profesional de gestión de inventario diseñado para negocios en Venezuela, con integración de tasa BCV y gestión de ventas en tiempo real.
 
 ## Características
 

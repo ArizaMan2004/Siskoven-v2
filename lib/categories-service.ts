@@ -1,11 +1,11 @@
 import { db } from "./firebase"
 import { collection, query, where, getDocs, addDoc } from "firebase/firestore"
 
-// Obtener todas las categorías del usuario
-export async function getCategories(userId: string): Promise<string[]> {
+// Categorías del negocio. Se comparten entre todo el equipo, no por persona.
+export async function getCategories(negocioId: string): Promise<string[]> {
   try {
     const categoriesRef = collection(db, "categorias")
-    const q = query(categoriesRef, where("userId", "==", userId))
+    const q = query(categoriesRef, where("negocioId", "==", negocioId))
     const snapshot = await getDocs(q)
 
     // Devuelve solo los nombres, ordenados alfabéticamente
@@ -19,11 +19,11 @@ export async function getCategories(userId: string): Promise<string[]> {
 }
 
 // Agregar una nueva categoría personalizada
-export async function addCategory(userId: string, categoryName: string) {
+export async function addCategory(negocioId: string, categoryName: string) {
   try {
     const categoriesRef = collection(db, "categorias")
     await addDoc(categoriesRef, {
-      userId,
+      negocioId,
       name: categoryName,
       createdAt: new Date(),
     })
