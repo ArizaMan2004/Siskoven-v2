@@ -327,8 +327,13 @@ export default function StatisticsView() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#ccc" />
                   <XAxis dataKey="date" stroke="#888888" fontSize={10} />
                   <YAxis stroke="#888888" fontSize={10} tickFormatter={(value) => `$${value.toFixed(0)}`} />
+                  {/* Sin anotar el tipo del valor: Recharts lo declara como
+                      `ValueType | undefined`, así que fijarlo a `number` deja
+                      de compilar en cuanto la librería sube de versión. Y no
+                      es solo tipografía — Recharts puede pasar undefined de
+                      verdad, y `undefined.toFixed()` revienta el gráfico. */}
                   <Tooltip
-                    formatter={(value: number) => [`$${value.toFixed(2)}`, "Total USD"]}
+                    formatter={(value) => [`$${(Number(value) || 0).toFixed(2)}`, "Total USD"]}
                     labelFormatter={(label) => `Fecha: ${label}`}
                   />
                   <Bar dataKey="totalUsd" fill="#8884d8" name="Ventas USD" />
@@ -361,10 +366,13 @@ export default function StatisticsView() {
                     ))}
                   </Pie>
                   <Tooltip
-                    formatter={(value: number, name: string) => [
-                      `$${value.toFixed(2)}`,
-                      name.charAt(0).toUpperCase() + name.slice(1),
-                    ]}
+                    formatter={(value, name) => {
+                      const etiqueta = String(name ?? "")
+                      return [
+                        `$${(Number(value) || 0).toFixed(2)}`,
+                        etiqueta.charAt(0).toUpperCase() + etiqueta.slice(1),
+                      ]
+                    }}
                   />
                   <Legend layout="horizontal" verticalAlign="bottom" align="center" iconType="circle" />
                 </PieChart>
