@@ -1,4 +1,4 @@
-import { BarChart3, Calculator, FileText, Landmark, Package, ShoppingCart, Wallet } from "lucide-react"
+import { BarChart3, Calculator, FileText, Landmark, Package, Receipt, ShoppingCart, Wallet } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { type Permission, type Role, can } from "@/lib/roles"
 
@@ -25,6 +25,7 @@ const ALL_NAV_ITEMS: NavItem[] = [
   { id: "cash", label: "Caja", shortLabel: "Caja", icon: Wallet, requires: "cash.openShift" },
   { id: "products", label: "Productos", shortLabel: "Productos", icon: Package, requires: "products.view" },
   { id: "cuentas", label: "Cuentas", shortLabel: "Cuentas", icon: Landmark, requires: "accounts.view" },
+  { id: "gastos", label: "Gastos", shortLabel: "Gastos", icon: Receipt, requires: "expenses.view" },
   { id: "statistics", label: "Estadísticas", shortLabel: "Números", icon: BarChart3, requires: "reports.view" },
   { id: "reports", label: "Reportes", shortLabel: "Reportes", icon: FileText, requires: "reports.view" },
   { id: "calculator", label: "Calculadora", shortLabel: "Calcular", icon: Calculator },

@@ -18,6 +18,7 @@ import ReportsView from "./reports-view"
 import CalculatorView from "./CalculatorView"
 import CashView from "./cash-view"
 import AccountsView from "./accounts-view"
+import ExpensesView from "./expenses-view"
 import TrialExpirationModal from "./trial-expiration-modal"
 import SyncBanner from "@/components/sync-banner"
 import { DEFAULT_VIEW, navItemsFor } from "./navigation"
@@ -168,6 +169,7 @@ export default function Dashboard() {
               {resolvedView === "sales" && <SalesView />}
               {resolvedView === "cash" && <CashView />}
               {resolvedView === "cuentas" && <AccountsView />}
+              {resolvedView === "gastos" && <ExpensesView />}
               {resolvedView === "products" && <ProductsView />}
               {resolvedView === "statistics" && <StatisticsView />}
               {resolvedView === "reports" && <ReportsView />}
