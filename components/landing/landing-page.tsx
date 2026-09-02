@@ -324,8 +324,11 @@ export default function LandingPage() {
               })}
             </ul>
 
-            <AnimatePresence mode="wait">
-              <m.div key={modulo.id} variants={fadeUp} initial="hidden" animate="visible" exit="hidden">
+            {/* Remonte por `key`. Ver la nota de lib/motion.ts: con
+                AnimatePresence en modo "wait", este carrusel no pasaba de la
+                primera diapositiva. */}
+            <div key={modulo.id}>
+              <m.div variants={fadeUp} initial="hidden" animate="visible">
                 <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-slate-400">
                   <modulo.icon className="size-3.5 text-[color:var(--landing-aqua)]" aria-hidden />
                   Módulo · {modulo.label}
@@ -346,7 +349,7 @@ export default function LandingPage() {
                   ))}
                 </ul>
               </m.div>
-            </AnimatePresence>
+            </div>
           </div>
         </div>
       </section>

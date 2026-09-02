@@ -1,7 +1,7 @@
 "use client"
 
 import { useRef, useState } from "react"
-import { AnimatePresence, m } from "framer-motion"
+import { m } from "framer-motion"
 import {
   AlertTriangle,
   ArrowLeft,
@@ -160,7 +160,8 @@ export default function ImportProductsDialog({ onClose, onImported }: Props) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-5">
-          <AnimatePresence mode="wait">
+          {/* Las fases se remontan por `key`. Ver la nota de lib/motion.ts. */}
+          <div key={fase}>
             {/* ------------------------------------------------ 1. archivo */}
             {fase === "archivo" && (
               <m.div key="archivo" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -387,7 +388,7 @@ export default function ImportProductsDialog({ onClose, onImported }: Props) {
                 </p>
               </m.div>
             )}
-          </AnimatePresence>
+          </div>
 
           {error && (
             <p className="text-destructive mt-4 flex items-start gap-2 text-sm">

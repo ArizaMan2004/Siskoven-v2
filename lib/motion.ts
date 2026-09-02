@@ -18,6 +18,25 @@
 //  5. Se respeta `prefers-reduced-motion` (lo aplica MotionConfig en
 //     providers.tsx): quien pide menos movimiento no recibe ninguno.
 
+// ---------------------------------------------------------------------------
+// NO SE USA AnimatePresence CON mode="wait"
+//
+// En este proyecto (framer-motion 12.23 + React 19.2 + LazyMotion) la animación
+// de salida no llega a completarse, así que el hijo entrante nunca se monta y el
+// contenido se queda congelado en el primero. Se detectó con síntomas raros de
+// verdad: el índice avanzaba —los puntos se movían, el botón cambiaba— pero la
+// pantalla no. Tenía frito el carrusel de la portada, el paso a paso del
+// registro (no se podía crear una cuenta) y el cambio de módulo del panel.
+//
+// El sustituto es envolver el contenido en un <div key={loQueCambia}>: React
+// desmonta y vuelve a montar, y framer reproduce la entrada. Se pierde la
+// animación de salida, que a 220 ms no se echa de menos.
+//
+// AnimatePresence SÍ funciona para lo que aparece y desaparece —diálogos,
+// paneles, avisos—, que es `{condicion && <m.div/>}`. Lo que falla es el
+// intercambio de un hijo por otro.
+// ---------------------------------------------------------------------------
+
 import type { Transition, Variants } from "framer-motion"
 
 /** Curva estándar: sale rápido y frena suave. */

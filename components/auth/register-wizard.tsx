@@ -2,7 +2,7 @@
 
 import { type FormEvent, useState } from "react"
 import Link from "next/link"
-import { AnimatePresence, m } from "framer-motion"
+import { m } from "framer-motion"
 import { createUserWithEmailAndPassword, sendEmailVerification } from "firebase/auth"
 import { doc, setDoc } from "firebase/firestore"
 import { buscarInvitacion, marcarInvitacionAceptada } from "@/lib/team"
@@ -183,7 +183,10 @@ export default function RegisterWizard({ onGoToLogin }: RegisterWizardProps) {
 
   return (
     <AuthShell step={step} totalSteps={3} estimate="~2 min">
-      <AnimatePresence mode="wait">
+      {/* Los pasos se remontan por `key`, no con AnimatePresence.
+          Ver la nota de lib/motion.ts: con mode="wait" esto se quedaba clavado
+          en el paso 1 y no se podía crear ninguna cuenta. */}
+      <div key={step}>
         {/* -------------------------------------------------------- paso 1 */}
         {step === 1 && (
           <m.div key="paso1" variants={viewTransition} initial="hidden" animate="visible" exit="exit">
@@ -454,7 +457,7 @@ export default function RegisterWizard({ onGoToLogin }: RegisterWizardProps) {
             </p>
           </m.div>
         )}
-      </AnimatePresence>
+      </div>
     </AuthShell>
   )
 }

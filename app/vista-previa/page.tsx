@@ -37,6 +37,7 @@ import {
 } from "lucide-react"
 import Sidebar from "@/components/dashboard/sidebar"
 import BottomNav from "@/components/dashboard/bottom-nav"
+import HelpButton from "@/components/dashboard/help-button"
 import { navGroupsFor, navItemsFor, navSplitMovil } from "@/components/dashboard/navigation"
 import {
   PERMISOS_POR_ROL,
@@ -52,7 +53,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { formatBs, formatMoney } from "@/lib/pricing"
 import { TIPOS_GASTO } from "@/lib/expenses"
-import { fadeUp, listItem, staggerContainer } from "@/lib/motion"
+import { fadeUp, listItem, staggerContainer, viewTransition } from "@/lib/motion"
 
 const CUENTAS = [
   { nombre: "Gaveta de la tienda", detalle: "Efectivo", saldo: 340.5, moneda: "USD", icono: Banknote },
@@ -153,6 +154,11 @@ export default function VistaPrevia() {
               <h1 className="text-base font-semibold sm:text-lg">Bodega La Esquina</h1>
               <p className="text-muted-foreground text-xs">Vista previa con datos de ejemplo</p>
             </div>
+
+            {/* La ayuda es la de verdad, no una maqueta: son los mismos
+                tutoriales que se abren dentro del sistema. La maqueta llama
+                "inicio" a lo que el sistema llama "home". */}
+            <HelpButton vista={vistaActual === "inicio" ? "home" : vistaActual} />
           </div>
 
           {/* El selector de rol, con su explicación.
@@ -209,11 +215,26 @@ export default function VistaPrevia() {
             ))}
           </div>
 
-          {vistaActual === "inicio" && <MaquetaInicio role={role} />}
-          {vistaActual === "cuentas" && <MaquetaCuentas />}
-          {vistaActual === "gastos" && <MaquetaGastos />}
-          {vistaActual === "clientes" && <MaquetaClientes />}
-          {vistaActual === "equipo" && <MaquetaEquipo />}
+          {/* Se cambia de maqueta con el MISMO mecanismo que usa el panel de
+              verdad, y no con un condicional suelto. Así, si ese mecanismo se
+              rompiera, se rompería aquí —donde se ve sin necesidad de una
+              cuenta— y no dentro del sistema.
+              Fue justo lo que pasó: con esto puesto se descubrió que el panel
+              se quedaba clavado en el primer módulo. Ver lib/motion.ts. */}
+          <div key={vistaActual}>
+            <m.div
+              variants={viewTransition}
+              initial="hidden"
+              animate="visible"
+              className="space-y-5"
+            >
+              {vistaActual === "inicio" && <MaquetaInicio role={role} />}
+              {vistaActual === "cuentas" && <MaquetaCuentas />}
+              {vistaActual === "gastos" && <MaquetaGastos />}
+              {vistaActual === "clientes" && <MaquetaClientes />}
+              {vistaActual === "equipo" && <MaquetaEquipo />}
+            </m.div>
+          </div>
         </main>
       </div>
 

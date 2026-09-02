@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { AnimatePresence, m } from "framer-motion"
+import { m } from "framer-motion"
 import { doc, getDoc } from "firebase/firestore"
 import { LogOut } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
@@ -11,6 +11,7 @@ import { ThemeToggle } from "@/components/theme-toggle"
 import Sidebar from "./sidebar"
 import BottomNav from "./bottom-nav"
 import RateWidget from "./rate-widget"
+import HelpButton from "./help-button"
 import HomeView from "./home-view"
 import ProductsView from "./products-view"
 import SalesView from "./sales-view"
@@ -131,6 +132,12 @@ export default function Dashboard() {
             <div className="flex shrink-0 items-center gap-1 sm:gap-2">
               {/* La tasa vigente siempre visible: es el dato que más se consulta. */}
               <RateWidget compact className="hidden sm:flex" />
+
+              {/* La ayuda de la pantalla que se esté mirando. Va aquí y no
+                  flotando porque abajo a la derecha vive el distintivo de
+                  reCAPTCHA, que Google obliga a mostrar. */}
+              <HelpButton vista={resolvedView} />
+
               <div className="lg:hidden">
                 <ThemeToggle />
               </div>
@@ -169,19 +176,11 @@ export default function Dashboard() {
           {/* La tasa, que en pantallas pequeñas no cabe en la cabecera. */}
           <RateWidget compact className="mb-4 sm:hidden" />
 
-          {/*
-            mode="wait" para que el módulo saliente termine antes de que entre
-            el siguiente: si se solapan, dos vistas pesadas se renderizan a la
-            vez y el cambio se siente lento justo en el momento que más se nota.
-          */}
-          <AnimatePresence mode="wait" initial={false}>
-            <m.div
-              key={resolvedView}
-              variants={viewTransition}
-              initial="hidden"
-              animate="visible"
-              exit="exit"
-            >
+          {/* El módulo cambia remontando por `key`, no con AnimatePresence.
+              Ver la nota de lib/motion.ts: con mode="wait" el panel se quedaba
+              congelado en el primer módulo que abrieras. */}
+          <div key={resolvedView}>
+            <m.div variants={viewTransition} initial="hidden" animate="visible">
               {resolvedView === "home" && <HomeView irA={setActiveView} />}
               {resolvedView === "sales" && <SalesView />}
               {resolvedView === "cash" && <CashView />}
@@ -195,7 +194,7 @@ export default function Dashboard() {
               {resolvedView === "equipo" && <TeamView />}
               {resolvedView === "calculator" && <CalculatorView />}
             </m.div>
-          </AnimatePresence>
+          </div>
         </main>
       </div>
 
