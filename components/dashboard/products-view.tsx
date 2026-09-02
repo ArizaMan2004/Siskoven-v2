@@ -12,11 +12,13 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Plus, Edit2, Trash2, X, Search } from "lucide-react"
+import { Plus, Edit2, Trash2, X, Search, FileSpreadsheet } from "lucide-react"
 import { getCategories, addCategory } from "@/lib/categories-service"
 import RateWidget from "./rate-widget"
 import PricingSettingsCard from "./pricing-settings-card"
 import TaxSettingsCard from "./tax-settings-card"
+import ImportProductsDialog from "./import-products-dialog"
+import { AnimatePresence } from "framer-motion"
 import { useRates } from "@/hooks/use-rates"
 import { usePricingSettings } from "@/hooks/use-pricing-settings"
 import { divisaPrice, formatBs, formatMoney, listPrice } from "@/lib/pricing"
@@ -50,15 +52,10 @@ export default function ProductsView() {
   // El cajero consulta el catálogo y el precio de venta, pero no ve a cuánto
   // compras ni puede tocar el inventario.
   //
-  // OJO: esto oculta el costo en la INTERFAZ, y nada más. Las reglas de
-  // Firestore autorizan documentos enteros, no campos sueltos: si el cajero
-  // puede leer un producto, la respuesta del servidor incluye `costUsd` y
-  // cualquiera puede verlo abriendo la pestaña de red del navegador. Está
-  // comprobado en tests/firestore-rules.test.mjs.
-  //
-  // Ocultarlo de verdad exige sacar el costo del documento: llevarlo a una
-  // colección aparte (productos_costos/{id}) legible solo por encargados.
-  // Mientras tanto, esto disuade pero no protege.
+  // Y aquí no solo se oculta: el costo vive en la colección productos_costos,
+  // que las reglas de Firestore no le dejan leer. Comprobado en
+  // tests/firestore-rules.test.mjs, incluida una prueba que lee el documento
+  // público y verifica que `costUsd` no viene dentro.
   const canSeeCosts = allows("costs.view")
   const canEdit = allows("products.edit")
   const [products, setProducts] = useState<Product[]>([])
@@ -74,6 +71,7 @@ export default function ProductsView() {
   const { settings: pricing } = usePricingSettings()
   const [newCategoryName, setNewCategoryName] = useState("")
   const [showMobileSearch, setShowMobileSearch] = useState(false)
+  const [showImport, setShowImport] = useState(false)
   // 🔑 ESTADO DE PAGINACIÓN
   const [currentPage, setCurrentPage] = useState(1) 
   const [formData, setFormData] = useState<FormData>({
@@ -304,17 +302,28 @@ export default function ProductsView() {
           <h2 className="text-2xl sm:text-3xl font-bold text-foreground">Productos</h2>
           <p className="text-sm sm:text-base text-muted-foreground">Gestiona tu inventario</p>
         </div>
-        <Button
-          onClick={() => {
-            setEditingId(null)
-            resetForm()
-            setShowForm(!showForm)
-          }}
-          className="gap-2 bg-primary hover:bg-primary/90 w-full sm:w-auto"
-        >
-          <Plus className="w-4 h-4" />
-          Agregar Producto
-        </Button>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+          {/* Cargar una hoja completa es lo primero que hace alguien que
+              empieza: teclear trescientos productos a mano no lo hace nadie. */}
+          {canEdit && (
+            <Button variant="outline" onClick={() => setShowImport(true)} className="gap-2">
+              <FileSpreadsheet className="w-4 h-4" />
+              Cargar desde Excel
+            </Button>
+          )}
+
+          <Button
+            onClick={() => {
+              setEditingId(null)
+              resetForm()
+              setShowForm(!showForm)
+            }}
+            className="gap-2 bg-primary hover:bg-primary/90"
+          >
+            <Plus className="w-4 h-4" />
+            Agregar Producto
+          </Button>
+        </div>
       </div>
 
       {/* Los ajustes de cobro solo los ve quien puede cambiarlos. */}
@@ -767,6 +776,12 @@ export default function ProductsView() {
           )}
         </button>
       </div>
+
+      <AnimatePresence>
+        {showImport && (
+          <ImportProductsDialog onClose={() => setShowImport(false)} onImported={loadProducts} />
+        )}
+      </AnimatePresence>
     </m.div>
   )
 }
