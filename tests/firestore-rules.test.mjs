@@ -549,3 +549,76 @@ describe("El cajero descuenta inventario al vender", () => {
     )
   })
 })
+
+describe("Tesorería: el cajero no ve dónde está el dinero", () => {
+  before(async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore()
+      await setDoc(doc(db, "cuentas", "cuenta-a"), {
+        negocioId: NEGOCIO_A,
+        nombre: "Banco de Venezuela",
+        tipo: "banco",
+        moneda: "BS",
+        saldo: 15000,
+        activa: true,
+      })
+      await setDoc(doc(db, "movimientos", "mov-a"), {
+        negocioId: NEGOCIO_A,
+        cuentaId: "cuenta-a",
+        tipo: "ingreso",
+        monto: 500,
+        moneda: "BS",
+        concepto: "Venta",
+        origen: "venta",
+        creadoPor: CAJERO_A,
+      })
+      await setDoc(doc(db, "gastos", "gasto-a"), {
+        negocioId: NEGOCIO_A,
+        tipo: "fijo",
+        categoria: "Alquiler",
+        concepto: "Alquiler de septiembre",
+        montoUsd: 200,
+        montoBs: 159000,
+        creadoPor: DUENO_A,
+      })
+    })
+  })
+
+  it("el cajero NO puede ver los saldos de las cuentas", async () => {
+    await assertFails(getDoc(doc(ctx(CAJERO_A), "cuentas", "cuenta-a")))
+  })
+
+  it("el cajero NO puede leer el libro de movimientos", async () => {
+    await assertFails(getDoc(doc(ctx(CAJERO_A), "movimientos", "mov-a")))
+  })
+
+  it("el cajero NO puede ver los gastos del negocio", async () => {
+    await assertFails(getDoc(doc(ctx(CAJERO_A), "gastos", "gasto-a")))
+  })
+
+  it("el encargado SÍ ve saldos, movimientos y gastos", async () => {
+    await assertSucceeds(getDoc(doc(ctx(DUENO_A), "cuentas", "cuenta-a")))
+    await assertSucceeds(getDoc(doc(ctx(DUENO_A), "movimientos", "mov-a")))
+    await assertSucceeds(getDoc(doc(ctx(DUENO_A), "gastos", "gasto-a")))
+  })
+
+  it("un movimiento no se puede retocar ni borrar", async () => {
+    await assertFails(updateDoc(doc(ctx(DUENO_A), "movimientos", "mov-a"), { monto: 1 }))
+    await assertFails(deleteDoc(doc(ctx(DUENO_A), "movimientos", "mov-a")))
+  })
+
+  it("no se puede cambiar el importe de un gasto ya registrado", async () => {
+    await assertFails(updateDoc(doc(ctx(DUENO_A), "gastos", "gasto-a"), { montoUsd: 1 }))
+  })
+
+  it("sí se puede apagar la recurrencia de un gasto fijo", async () => {
+    await assertSucceeds(
+      updateDoc(doc(ctx(DUENO_A), "gastos", "gasto-a"), { recurrencia: { activa: false } }),
+    )
+  })
+
+  it("el dueño de otro negocio no ve nada de esto", async () => {
+    await assertFails(getDoc(doc(ctx(DUENO_B), "cuentas", "cuenta-a")))
+    await assertFails(getDoc(doc(ctx(DUENO_B), "gastos", "gasto-a")))
+  })
+})

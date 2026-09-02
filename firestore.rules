@@ -282,6 +282,57 @@ service cloud.firestore {
     }
 
     // ------------------------------------------------------------------
+    // cuentas · movimientos  (tesorería)
+    //
+    // Dónde vive el dinero. El saldo NO se recalcula al leer: se mantiene con
+    // increment() dentro del mismo lote que escribe el movimiento.
+    //
+    // Por eso la regla del saldo es tan permisiva como tiene que serlo y ni un
+    // poco más: quien pueda escribir movimientos puede mover el saldo, y eso
+    // es exactamente lo que hace falta. Cuadrar saldo y movimientos desde las
+    // reglas es imposible (no pueden sumar una colección); el control real es
+    // que los movimientos son inmutables y siempre queda el rastro.
+    // ------------------------------------------------------------------
+    match /cuentas/{cuentaId} {
+      // Ver dónde está el dinero es cosa de encargados y dueños. Un cajero no
+      // tiene por qué saber cuánto hay en el banco.
+      allow read: if member() && isAdmin() && mine(resource);
+      allow create: if member() && isAdmin() && staysMine();
+      allow update: if member() && mine(resource) && staysMine();
+      allow delete: if false; // se desactivan
+    }
+
+    match /movimientos/{movimientoId} {
+      allow read: if member() && isAdmin() && mine(resource);
+      allow create: if member() && staysMine()
+                    && request.resource.data.creadoPor == request.auth.uid;
+      // Un movimiento no se retoca. Si se registró mal, se corrige con otro
+      // movimiento en sentido contrario, y quedan los dos.
+      allow update, delete: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // gastos · proveedores
+    // ------------------------------------------------------------------
+    match /gastos/{gastoId} {
+      allow read: if member() && isAdmin() && mine(resource);
+      allow create: if member() && staysMine()
+                    && request.resource.data.creadoPor == request.auth.uid;
+      // Solo se puede apagar la recurrencia de un gasto fijo; el importe y el
+      // concepto quedan como se registraron.
+      allow update: if member() && isAdmin() && mine(resource)
+                    && notChanging(['montoUsd', 'montoBs', 'tipo', 'fecha', 'creadoPor']);
+      allow delete: if false;
+    }
+
+    match /proveedores/{proveedorId} {
+      allow read: if member() && mine(resource);
+      allow create: if member() && isAdmin() && staysMine();
+      allow update: if member() && isAdmin() && mine(resource) && staysMine();
+      allow delete: if false; // se desactivan, para no romper el histórico
+    }
+
+    // ------------------------------------------------------------------
     // turnos de caja
     // ------------------------------------------------------------------
     match /turnos/{turnoId} {
