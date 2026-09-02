@@ -183,19 +183,6 @@
   }
 }
 
-/* El distintivo de reCAPTCHA se ancla abajo a la derecha y tapaba la barra de
-   navegación en el teléfono. Se sube por encima de ella; no se oculta, porque
-   Google exige mostrarlo o incluir su texto de atribución. */
-.grecaptcha-badge {
-  z-index: 30 !important;
-}
-
-@media (max-width: 1023px) {
-  .grecaptcha-badge {
-    bottom: calc(5rem + env(safe-area-inset-bottom, 0px)) !important;
-  }
-}
-
 /* ---------------------------------------------------------------------------
    UTILIDADES DE LA PÁGINA DE PRESENTACIÓN
 

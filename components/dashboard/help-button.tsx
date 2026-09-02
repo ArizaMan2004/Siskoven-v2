@@ -21,9 +21,9 @@ interface Props {
  * VA EN LA CABECERA, NO FLOTANDO
  *
  * La cabecera es pegajosa, así que el botón está siempre a la vista sin tapar
- * nada. Un botón flotante habría chocado con el distintivo de reCAPTCHA, que
- * Google obliga a mostrar y que ya se ancla abajo a la derecha —y que en el
- * teléfono, además, se sube por encima de la barra de navegación—.
+ * nada. Nació aquí porque abajo a la derecha vivía el distintivo de reCAPTCHA;
+ * ese ya no está, pero el sitio se queda: un botón flotante tapa contenido
+ * justo en la esquina donde el pulgar ya tiene la barra de navegación.
  *
  * EL PUNTITO
  *
