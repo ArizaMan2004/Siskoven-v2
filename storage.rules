@@ -1,0 +1,74 @@
+rules_version = '2';
+
+// ============================================================================
+// REGLAS DE ALMACENAMIENTO DE SISKOVEN
+// ============================================================================
+//
+// Aquí viven los comprobantes de pago: capturas de pago móvil, transferencias
+// y Zelle que los clientes enseñan al cobrar.
+//
+// POR QUÉ ESTO ES MÁS DELICADO QUE UNA FOTO CUALQUIERA
+//
+// Un comprobante lleva el TELÉFONO del cliente, su banco y a veces su cédula.
+// Son datos de una persona que no es cliente de Siskoven y que no eligió estar
+// aquí. Una URL adivinable o pública sería repartirlos.
+//
+// Por eso la ruta empieza por el negocio —negocios/{negocioId}/…— y la regla
+// comprueba que quien pide sea de ESE negocio. Sin esa comprobación, tener el
+// enlace bastaría para ver el comprobante de cualquier comercio.
+//
+// Desplegar con:  firebase deploy --only storage
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Documento del usuario que pide, para saber a qué negocio pertenece.
+    // Storage puede leer de Firestore, y es la única forma de saberlo: el
+    // token de autenticación no lleva el negocio.
+    function userDoc() {
+      return firestore.get(/databases/(default)/documents/usuarios/$(request.auth.uid)).data;
+    }
+
+    function miNegocio() {
+      // Sin negocio explícito, el negocio es la propia cuenta: igual que en
+      // firestore.rules, para que un comercio de un solo dueño funcione sin
+      // configurar nada.
+      return userDoc().get('negocioId', request.auth.uid);
+    }
+
+    function verificado() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    // Comprobantes de pago.
+    match /negocios/{negocioId}/comprobantes/{archivo} {
+      allow read: if verificado() && negocioId == miNegocio();
+
+      // Solo imágenes, y con tope de tamaño.
+      //
+      // 6 MB es holgado para una captura ya comprimida (rondan los 150 kB),
+      // pero corta de raíz que alguien use el almacenamiento del negocio como
+      // disco duro. El límite se comprueba AQUÍ y no solo en el navegador,
+      // porque el navegador se puede saltar.
+      allow create: if verificado()
+                    && negocioId == miNegocio()
+                    && request.resource.size < 6 * 1024 * 1024
+                    && request.resource.contentType.matches('image/.*');
+
+      // Un comprobante no se reemplaza. Si se subió el que no era, se sube otro
+      // y quedan los dos: sobrescribir la prueba de un pago es exactamente lo
+      // que no puede poder hacerse.
+      allow update: if false;
+
+      // Y no se borra desde la aplicación. Si algún día hace falta purgar por
+      // espacio, que sea un trabajo programado con reglas propias, no un botón
+      // al alcance de quien cobra.
+      allow delete: if false;
+    }
+
+    // Todo lo que no esté contemplado arriba queda denegado.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

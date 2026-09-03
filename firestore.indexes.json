@@ -251,6 +251,20 @@
           "order": "ASCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "comprobantes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "negocioId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "referencia",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []

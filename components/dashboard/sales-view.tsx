@@ -14,6 +14,13 @@ import { useRates } from "@/hooks/use-rates"
 import { getTurnoAbierto } from "@/lib/cash-service"
 import { type SaleType, loadProducts as fetchCatalogo, esServicio } from "@/lib/products-service"
 import { type Cliente, listarClientes, puedeFiar, registrarDeuda } from "@/lib/customers"
+import ReceiptCapture from "./receipt-capture"
+import {
+  type DatosComprobante,
+  pideComprobante,
+  registrarComprobante,
+  subirImagenComprobante,
+} from "@/lib/payment-receipts"
 import { reportFirestoreError, reportFirestoreSuccess } from "@/lib/sync-status"
 import { type ReceiptData, printReceipt } from "@/lib/thermal-receipt"
 import { createNumberedDocument, isOfflineError, unnumbered } from "@/lib/document-numbers"
@@ -132,6 +139,12 @@ export default function SalesView() {
   const [clientesConSaldo, setClientesConSaldo] = useState<Cliente[]>([])
   /** Días de plazo del fiado. Cero es "sin fecha": no todo el fiado tiene plazo. */
   const [diasPlazo, setDiasPlazo] = useState(15)
+  /** Comprobante del pago electrónico: sus datos y la imagen, si la hay. */
+  const [comprobante, setComprobante] = useState<{
+    datos: DatosComprobante | null
+    archivo: File | null
+    completo: boolean
+  }>({ datos: null, archivo: null, completo: false })
   const [clientPhonePrefix, setClientPhonePrefix] = useState<string>("0412")
   const [clientPhoneNumber, setClientPhoneNumber] = useState("") 
   const [clientAddress, setClientAddress] = useState("")
@@ -659,6 +672,9 @@ export default function SalesView() {
   }, [negocioId, allows])
 
   const esFiado = paymentMethod === "credit"
+  // Los cobros electrónicos piden comprobante; el efectivo no, porque el dinero
+  // está en la mano y no deja rastro que cuadrar después contra el banco.
+  const necesitaComprobante = pideComprobante(paymentMethod)
   const clienteDelFiado = clientesConSaldo.find((c) => c.id === clientId) ?? null
   const avisoFiado =
     esFiado && clienteDelFiado ? puedeFiar(clienteDelFiado, totalUsd) : { permitido: true }
@@ -884,6 +900,46 @@ export default function SalesView() {
         reportFirestoreError(error)
       }
 
+      // El comprobante del pago: primero la imagen, después sus datos.
+      //
+      // Va después de crear la venta y NO dentro de su transacción a propósito.
+      // Subir una imagen por los datos móviles de una bodega puede tardar
+      // segundos, y meter eso dentro de la transacción del correlativo la haría
+      // caducar. Si la subida falla, la venta y los datos del comprobante se
+      // guardan igual: se pierde la foto, no el cobro ni la referencia, que es
+      // lo que hace falta para conciliar.
+      if (necesitaComprobante && comprobante.datos) {
+        try {
+          let imagen: { path: string; url: string } | null = null
+
+          if (comprobante.archivo) {
+            try {
+              imagen = await subirImagenComprobante({
+                negocioId: negocioId ?? user.uid,
+                archivo: comprobante.archivo,
+                referencia: comprobante.datos.referencia,
+              })
+            } catch (error) {
+              console.warn("No se pudo subir la imagen del comprobante:", error)
+            }
+          }
+
+          await registrarComprobante({
+            negocioId: negocioId ?? user.uid,
+            datos: comprobante.datos,
+            imagen,
+            ventaId: ventaCreadaId,
+            numeroDocumento: numeroAsignado,
+            registradoPor: user.uid,
+          })
+        } catch (error) {
+          reportFirestoreError(error)
+          alert(
+            `LA VENTA SE GUARDÓ, PERO EL COMPROBANTE NO.\n\nApunta la referencia ${comprobante.datos.referencia} por si hay que reclamar al banco.`,
+          )
+        }
+      }
+
       // Fiado: la venta ya está registrada, ahora se anota la deuda.
       //
       // Va DESPUÉS y no dentro de la transacción de la venta porque la deuda
@@ -984,6 +1040,7 @@ export default function SalesView() {
       // Limpiar estados
       setCart([])
       setPaymentBreakdown([]) // Limpiar el desglose
+      setComprobante({ datos: null, archivo: null, completo: false })
       setDiscountPercentage(0)
       setPagaCon("")
       setClientId(null)
@@ -1441,6 +1498,9 @@ export default function SalesView() {
                           if (e.target.value !== "mixed") {
                               setPaymentBreakdown([]);
                           }
+                          // Y el comprobante siempre: el de un pago móvil no
+                          // vale para el cobro en efectivo que se elija después.
+                          setComprobante({ datos: null, archivo: null, completo: false });
                       }}
                       className="w-full px-3 py-2 border border-input rounded-md bg-background mt-2 text-sm"
                     >
@@ -1457,6 +1517,15 @@ export default function SalesView() {
                       {allows("sales.credit") && <option value="credit">Fiado (queda a deber)</option>}
                     </select>
                   </div>
+
+                  {necesitaComprobante && negocioId && (
+                    <ReceiptCapture
+                      negocioId={negocioId}
+                      metodo={paymentMethod}
+                      montoEsperadoBs={totalBs}
+                      onCambio={setComprobante}
+                    />
+                  )}
 
                   {esFiado && (
                     <div className="border-warning/40 bg-warning/5 space-y-3 rounded-md border p-3">
