@@ -1,5 +1,6 @@
 import { initializeApp } from "firebase/app"
 import { getAuth } from "firebase/auth"
+import { getStorage } from "firebase/storage"
 import {
   initializeFirestore,
   persistentLocalCache,
@@ -17,6 +18,16 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig)
 export const auth = getAuth(app)
+
+/**
+ * Almacenamiento de archivos: por ahora, los comprobantes de pago.
+ *
+ * No lleva caché sin conexión como Firestore. Una imagen no se puede encolar
+ * en el navegador y subirla mañana sin ocupar el disco del teléfono, así que
+ * si no hay internet el comprobante no se sube — pero la VENTA sí se guarda.
+ * Ver lib/payment-receipts.ts: la imagen es prueba, no requisito para cobrar.
+ */
+export const storage = getStorage(app)
 
 /**
  * Firestore con caché persistente en disco.

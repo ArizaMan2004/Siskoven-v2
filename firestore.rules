@@ -478,6 +478,37 @@ service cloud.firestore {
     }
 
     // ------------------------------------------------------------------
+    // comprobantes de pago
+    //
+    // La captura del pago móvil y sus datos. Es la prueba de que el cliente
+    // pagó, y la llave para cuadrar contra el estado de cuenta del banco.
+    //
+    // La LEE cualquiera que pueda vender, y no solo quien administra: el cajero
+    // necesita comprobar, ANTES de entregar la mercancía, si esa referencia ya
+    // se usó. Esa consulta es justamente la que caza la captura reenviada.
+    // ------------------------------------------------------------------
+    match /comprobantes/{comprobanteId} {
+      allow read: if member() && mine(resource)
+                  && (puede('sales.create') || puede('accounts.view'));
+
+      allow create: if member() && puede('sales.create') && staysMine()
+                    && request.resource.data.registradoPor == request.auth.uid
+                    && request.resource.data.referencia is string
+                    && request.resource.data.referencia.size() > 0
+                    && request.resource.data.conciliado == false;
+
+      // Lo único que se puede tocar después es marcarlo cuadrado contra el
+      // banco. La referencia, el monto y la imagen quedan como se registraron:
+      // un comprobante que se puede editar deja de ser una prueba.
+      allow update: if member() && puede('accounts.view') && mine(resource)
+                    && notChanging(['negocioId', 'referencia', 'montoBs', 'bancoCodigo',
+                                    'imagenPath', 'imagenUrl', 'ventaId', 'registradoPor',
+                                    'createdAt']);
+
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------------------------
     // roles
     //
     // Los roles que crea el dueño. Este documento es la fuente de verdad para
